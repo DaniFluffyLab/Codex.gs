@@ -144,20 +144,20 @@ class CodexWorker {
 
         // FASE 1 - CARREGA A API DO GOOGLE
 
-        try { this._sheet = SpreadsheetApp.openById(this._sheetId) }            // Carrega planilha
+        try { this._sheet = SpreadsheetApp.openById(sheetId) }            // Carrega planilha
         catch (e) { throw Error(`Erro ao carregar a planilha: ${e.stack}`) }    // Retorna erro
 
 
 
         // FASE 2 - CARREGA KEYS
 
-        try { this._table = this._sheet.getSheetByName(this._tableName) }   // Carrega página
+        try { this._table = this._sheet.getSheetByName(tableName) }   // Carrega página
         catch (e) { throw Error(`Erro ao carregar a página: ${e.stack}`) }  // Retorna algum erro
 
         let keys_colIdx = undefined     // Cria var para guardar índice
         try {
             keys_colIdx = this._table.getRange("1:1")               // Seleciona cabeçalho
-                .createTextFinder(this.keyColumnName).findNext()    // Procura pelo nome
+                .createTextFinder(this._keyColumnName).findNext()    // Procura pelo nome
                 .getColumn()                                        // Obtém indice
         }
         catch (e) { throw Error(`Erro ao procurar pela keyColumn: ${e.stack}`) }  // Retorna algum erro
@@ -176,8 +176,11 @@ class CodexWorker {
         // Armazena todas as keys para acesso do objeto
         this._keys = new Set(keys_values)
 
-        // TO DO - CRIAR ESTRUTURA DE DADOS
+        
 
+        // FASE 3 - CRIA ESTRUTURA DE DADOS
+
+        
         // if (this._fullLoad)
 
     }
