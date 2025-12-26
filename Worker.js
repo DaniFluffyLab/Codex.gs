@@ -14,7 +14,7 @@ class CodexWorker {
     * @private
     */
     _markAs(key, newState) {
- 
+
         // Verifica se o estado solicitado é válido
         const validStates = ["new", "modified", "deleted"];
         if (!validStates.includes(newState)) throw Error("Not a valid state.")
@@ -114,11 +114,13 @@ class CodexWorker {
 
     constructor(sheetId, tableName, keyColumnName, fullLoad = false) {
 
-        /** @private ID da planilha origem */
-        this._sheetId = sheetId
+        // FASE 0 - DEFINIÇÃO DE VARS GLOBAIS
 
-        /** @private Nome da página na planilha */
-        this._tableName = tableName
+        /** @private Planilha origem */
+        this._sheet = undefined
+
+        /** @private Página na planilha */
+        this._table = undefined
 
         /** @private Nome no cabeçalho para coluna de keys */
         this._keyColumnName = keyColumnName
@@ -126,14 +128,58 @@ class CodexWorker {
         /** @private Bool para informar se worker foi carregado completamente */
         this._fullLoad = fullLoad
 
-        /** @private Map com todos os dados carregados */
-        this._data = new Map()
-
         /** @private Set com todas as keys */
-        this._keys = new Set()
+        this._keys = undefined
+
+        /** @private Map com todos os dados carregados */
+        this._data = undefined
 
         /** @private Set com keys alteradas */
         this._keyStatus = new Map()
+
+
+
+
+
+
+        // FASE 1 - CARREGA A API DO GOOGLE
+
+        try { this._sheet = SpreadsheetApp.openById(this._sheetId) }            // Carrega planilha
+        catch (e) { throw Error(`Erro ao carregar a planilha: ${e.stack}`) }    // Retorna erro
+
+
+
+        // FASE 2 - CARREGA KEYS
+
+        try { this._table = this._sheet.getSheetByName(this._tableName) }   // Carrega página
+        catch (e) { throw Error(`Erro ao carregar a página: ${e.stack}`) }  // Retorna algum erro
+
+        let keys_colIdx = undefined     // Cria var para guardar índice
+        try {
+            keys_colIdx = this._table.getRange("1:1")               // Seleciona cabeçalho
+                .createTextFinder(this.keyColumnName).findNext()    // Procura pelo nome
+                .getColumn()                                        // Obtém indice
+        }
+        catch (e) { throw Error(`Erro ao procurar pela keyColumn: ${e.stack}`) }  // Retorna algum erro
+
+        let keys_values = undefined     // Cria var para guardar keys
+        try {
+            keys_values = this._table                           // Acessa tabela
+                .getRange(`R2C${keys_colIdx}:C${keys_colIdx}`)  // Seleciona coluna de keys
+                .getValues()                                    // Obtém matriz
+                .flat()                                         // Converte em vetor
+                .filter(Boolean)                                // Filtra dados vazios
+                .map(String)                                    // Converte dados para String
+        }
+        catch (e) { throw Error(`Erro ao obter keys: ${e.stack}`) }  // Retorna algum erro
+    
+        // Armazena todas as keys para acesso do objeto
+        this._keys = new Set(keys_values)
+
+        // TO DO - CRIAR ESTRUTURA DE DADOS
+
+        // if (this._fullLoad)
+
     }
 
 
