@@ -112,7 +112,7 @@ class CodexWorker {
 
 
 
-    constructor(sheetId, tableName, keyColumnName, fullLoad = false) {
+    constructor(sheetId, tableName, keyColumnName, options) {
 
         // FASE 0 - DEFINIÇÃO DE VARS GLOBAIS
 
@@ -125,8 +125,12 @@ class CodexWorker {
         /** @private Nome no cabeçalho para coluna de keys */
         this._keyColumnName = keyColumnName
 
-        /** @private Bool para informar se worker foi carregado completamente */
-        this._fullLoad = fullLoad
+        /** @private Objeto de configurações */
+        this._options = {
+            mode: "minimal", // minimal - filtered - full
+            columns: [],
+            ...options
+        }
 
         /** @private Set com todas as keys */
         this._keys = undefined
@@ -137,51 +141,125 @@ class CodexWorker {
         /** @private Set com keys alteradas */
         this._keyStatus = new Map()
 
-
+        let log = `[Codex] SheetID:"${sheetId}"; Table: "${tableName}"`
 
 
 
 
         // FASE 1 - CARREGA A API DO GOOGLE
 
-        try { this._sheet = SpreadsheetApp.openById(sheetId) }            // Carrega planilha
-        catch (e) { throw Error(`Erro ao carregar a planilha: ${e.stack}`) }    // Retorna erro
+        try { this._sheet = SpreadsheetApp.openById(sheetId) }                          // Carrega planilha
+        catch (e) { throw Error(`${log} - Erro ao carregar a planilha: ${e.stack}`) }   // Retorna erro
+
+        try { this._table = this._sheet.getSheetByName(tableName) }                 // Carrega página
+        catch (e) { throw Error(`${log} - Erro ao carregar a página: ${e.stack}`) } // Retorna outros erros
+
+        // Armazena tamanho da planilha
+        let shDims = { rows: this._table.getLastRow(), cols: this._table.getLastColumn() }
 
 
+        // FASE 2 - CARREGA COLUNAS
 
-        // FASE 2 - CARREGA KEYS
-
-        try { this._table = this._sheet.getSheetByName(tableName) }   // Carrega página
-        catch (e) { throw Error(`Erro ao carregar a página: ${e.stack}`) }  // Retorna algum erro
-
-        let keys_colIdx = undefined     // Cria var para guardar índice
+        let colsNames = undefined   // Cria Var para nomes das colunas
         try {
-            keys_colIdx = this._table.getRange("1:1")               // Seleciona cabeçalho
-                .createTextFinder(this._keyColumnName).findNext()    // Procura pelo nome
-                .getColumn()                                        // Obtém indice
+            let lastCol = shDims.cols                           // Obtém última coluna
+            if (lastCol == 0) throw Error("Não há colunas")     // Lança erro se sem colunas
+            colsNames = this._table.getRange(1, 1, 1, lastCol)  // Seleciona cabeçalho
+                .getValues()[0]                                 // Obtém dados
         }
-        catch (e) { throw Error(`Erro ao procurar pela keyColumn: ${e.stack}`) }  // Retorna algum erro
+        catch (e) { throw Error(`${log} - Erro ao obter dados das colunas: ${e.stack}`) }  // Retorna erros
 
-        let keys_values = undefined     // Cria var para guardar keys
+
+
+
+        // FASE 3 - CARREGA KEYS
+
+        let keys_colIdx = undefined                                                         // Cria var para guardar índice
+        try { keys_colIdx = colsNames.indexOf(this._keyColumnName) }                        // Procura pelo nome
+        catch (e) { throw Error(`${log} - Erro ao procurar pela keyColumn: ${e.stack}`) }   // Retorna outros erros
+        if (keys_colIdx == -1) throw Error(`${log} - keyColumn não encontrada`)             // Se não achar coluna, lança erro
+
+        this._keys = new Set()      // Cria Set para guardar keys
         try {
-            keys_values = this._table                           // Acessa tabela
-                .getRange(`R2C${keys_colIdx}:C${keys_colIdx}`)  // Seleciona coluna de keys
-                .getValues()                                    // Obtém matriz
-                .flat()                                         // Converte em vetor
-                .filter(Boolean)                                // Filtra dados vazios
-                .map(String)                                    // Converte dados para String
+            let lastRow = shDims.rows                                       // Obtém última linha
+            if (lastRow >= 2) {                                             // Se planilha não está vazia
+                let keys_rawValues = this._table                            // Acessa tabela
+                    .getRange(2, keys_colIdx + 1, lastRow - 1, 1)           // Seleciona coluna de keys
+                    .getValues()                                            // Obtém matriz
+                for (let [k] of keys_rawValues) {                           // Para cada key
+                    if (k == "" || k == null || k == undefined) continue    // Ignora keys vazias
+                    this._keys.add(String(k).trim())                        // Adiciona Key ao Set mestre
+                }
+            }
         }
-        catch (e) { throw Error(`Erro ao obter keys: ${e.stack}`) }  // Retorna algum erro
-    
-        // Armazena todas as keys para acesso do objeto
-        this._keys = new Set(keys_values)
+        catch (e) { throw Error(`${log} - Erro ao obter keys: ${e.stack}`) }  // Retorna outros erros
 
-        
+
+
+
+        // FASE 4 - OBTÉM ÍNDICES DE COLUNAS  
+
+        let colsToAnalyze = new Set(colsNames)  // Cria variável para array de colunas a analizar
+        let colsIndexes = new Map()             // Cria Map para índices das colunas
+
+        // Caso hajam parâmetros sobre quais colunas obter
+        if (this._options.columns.length != 0) {
+            let hasInvalid = this._options.columns.some(item => !colsToAnalyze.has(item));      // Verifica a validade das colunas
+            if (hasInvalid) throw Error(`${log} - Foram solicitadas colunas inexitentes.`);     // Lança erro se inválido 
+            colsToAnalyze = new Set(this._options.columns)                                      // Prepara para analisar as colunas requisitadas
+        }
+
+        // Garante a coluna de ID
+        colsToAnalyze.add(keyColumnName)
+
+        // Para cada coluna
+        colsNames.forEach((col, index) => {
+            if (!colsToAnalyze.has(col)) return;    // Ignora colunas não-necessárias
+            colsIndexes.set(col, index);            // Armazena índice da coluna
+        })
+
+
+
+
+        // FASE 3 - OBTÉM ÍNDICE DAS COLUNAS
+
+
 
         // FASE 3 - CRIA ESTRUTURA DE DADOS
 
-        
-        // if (this._fullLoad)
+        switch (this._options.mode) {
+
+            // Modo mínimo
+            case "minimal":
+                this._data = new Map(); // Carrega map vazio
+                break;
+
+            // Modo filtrado
+            case "filtered":
+                // ainda não sei
+                break;
+
+            case "full":
+                // também não sei
+                break;
+
+        }
+
+
+
+
+
+
+        if (this._fullLoad) {
+
+            let data_root = undefined                                     // Cria var para dados
+            try { data_root = this._table.getDataRange().getValues() }    // Obtém dados
+            catch (e) { throw Error(`Erro ao obter dados: ${e.stack}`) }    // Retorna outros erros
+
+            let data_keyIdx = data_root[0].indexOf(this._keyColumnName)
+            let data_headers = data_root
+
+        }
 
     }
 
