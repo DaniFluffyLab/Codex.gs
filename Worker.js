@@ -114,13 +114,21 @@ class CodexWorker {
 
     constructor(sheetId, tableName, keyColumnName, options) {
 
-        // FASE 0 - DEFINIÇÃO DE VARS GLOBAIS
+        // FASE 0 - VALIDAÇÃO DE DEPENDÊNCIAS E DEFINIÇÃO DE VARS GLOBAIS
+        if (typeof Sheets === 'undefined') {
+            throw new Error(
+                `[Codex] O Serviço Avançado "Google Sheets API" não está ativo. ` +
+                `Para utilizar a biblioteca Codex, ative-o com o identificador "Sheets" em: ` +
+                `Editor do GAS > Serviços (+) > Google Sheets API. ` +
+                `Documentação: https://developers.google.com/apps-script/guides/services/advanced`
+            );
+        }
 
         /** @private Planilha origem */
-        this._sheet = undefined
+        this._sheet;
 
         /** @private Página na planilha */
-        this._table = undefined
+        this._table;
 
         /** @private Nome no cabeçalho para coluna de keys */
         this._keyColumnName = keyColumnName
@@ -128,18 +136,22 @@ class CodexWorker {
         /** @private Objeto de configurações */
         this._options = {
             mode: "minimal", // minimal - filtered - full
+            filters: [], // Apenas caso mode = filtered
             columns: [],
             ...options
         }
 
         /** @private Set com todas as keys */
-        this._keys = undefined
+        this._allkeys;
 
+        /** @private Set com keys carregadas */
+        this._loadedkeys;
+        
         /** @private Map com todos os dados carregados */
-        this._data = undefined
+        this._data = new Map();
 
         /** @private Set com keys alteradas */
-        this._keyStatus = new Map()
+        this._keyStatus = new Map();
 
         let log = `[Codex] SheetID:"${sheetId}"; Table: "${tableName}"`
 
@@ -160,7 +172,7 @@ class CodexWorker {
 
         // FASE 2 - CARREGA COLUNAS
 
-        let colsNames = undefined   // Cria Var para nomes das colunas
+        let colsNames;   // Cria Var para nomes das colunas
         try {
             let lastCol = shDims.cols                           // Obtém última coluna
             if (lastCol == 0) throw Error("Não há colunas")     // Lança erro se sem colunas
@@ -174,12 +186,12 @@ class CodexWorker {
 
         // FASE 3 - CARREGA KEYS
 
-        let keys_colIdx = undefined                                                         // Cria var para guardar índice
+        let keys_colIdx;                                                                    // Cria var para guardar índice
         try { keys_colIdx = colsNames.indexOf(this._keyColumnName) }                        // Procura pelo nome
         catch (e) { throw Error(`${log} - Erro ao procurar pela keyColumn: ${e.stack}`) }   // Retorna outros erros
         if (keys_colIdx == -1) throw Error(`${log} - keyColumn não encontrada`)             // Se não achar coluna, lança erro
 
-        this._keys = new Set()      // Cria Set para guardar keys
+        this._allkeys = new Set()      // Cria Set para guardar keys
         try {
             let lastRow = shDims.rows                                       // Obtém última linha
             if (lastRow >= 2) {                                             // Se planilha não está vazia
@@ -188,7 +200,7 @@ class CodexWorker {
                     .getValues()                                            // Obtém matriz
                 for (let [k] of keys_rawValues) {                           // Para cada key
                     if (k == "" || k == null || k == undefined) continue    // Ignora keys vazias
-                    this._keys.add(String(k).trim())                        // Adiciona Key ao Set mestre
+                    this._allkeys.add(String(k).trim())                     // Adiciona Key ao Set mestre
                 }
             }
         }
@@ -199,39 +211,32 @@ class CodexWorker {
 
         // FASE 4 - OBTÉM ÍNDICES DE COLUNAS  
 
-        let colsToAnalyze = new Set(colsNames)  // Cria variável para array de colunas a analizar
-        let colsIndexes = new Map()             // Cria Map para índices das colunas
+        let colsToAnalyze = new Set([keyColumnName, ...colsNames])          // Cria variável para array de colunas a analizar
+        let colsRanges = new Map()                                          // Cria Map para índices das colunas
+        let nameToIndex = new Map(colsNames.map((name, i) => [name, i]));   // Map temporário para armazenar índices originais
 
         // Caso hajam parâmetros sobre quais colunas obter
         if (this._options.columns.length != 0) {
             let hasInvalid = this._options.columns.some(item => !colsToAnalyze.has(item));      // Verifica a validade das colunas
             if (hasInvalid) throw Error(`${log} - Foram solicitadas colunas inexitentes.`);     // Lança erro se inválido 
-            colsToAnalyze = new Set(this._options.columns)                                      // Prepara para analisar as colunas requisitadas
+            colsToAnalyze = new Set([keyColumnName, ...this._options.columns])                  // Prepara para analisar as colunas requisitadas
         }
 
-        // Garante a coluna de ID
-        colsToAnalyze.add(keyColumnName)
-
-        // Para cada coluna
-        colsNames.forEach((col, index) => {
-            if (!colsToAnalyze.has(col)) return;    // Ignora colunas não-necessárias
-            colsIndexes.set(col, index);            // Armazena índice da coluna
-        })
+        // Para cada coluna a analisar
+        colsToAnalyze.forEach(col => {
+            let index = nameToIndex.get(col);                                       // Obtém índice
+            if (colsRanges.has(col)) return;                                        // Caso coluna ja exista, ignorar
+            colsRanges.set(col, `'${tableName}'!R2C${index + 1}:C${index + 1}`);    // Armazena range
+        });
 
 
 
-
-        // FASE 3 - OBTÉM ÍNDICE DAS COLUNAS
-
-
-
-        // FASE 3 - CRIA ESTRUTURA DE DADOS
+        // FASE 5 - OBTEM DADOS
 
         switch (this._options.mode) {
 
             // Modo mínimo
             case "minimal":
-                this._data = new Map(); // Carrega map vazio
                 break;
 
             // Modo filtrado
@@ -240,33 +245,57 @@ class CodexWorker {
                 break;
 
             case "full":
-                // também não sei
+
+                // Caso não tenha dados, ignorar
+                if (this._allkeys.size == 0) break;
+
+                // Armazena os ranges em array
+                let allRanges = Array.from(colsRanges.values())
+                let allCols = Array.from(colsRanges.keys())
+
+                // Solicita a API os dados
+                let apiResponse = Sheets.Spreadsheets.Values.batchGet(sheetId, {
+                    ranges: allRanges,
+                    valueRenderOption: "UNFORMATTED_VALUE",
+                    dateTimeRenderOption: "FORMATTED_STRING",
+                    majorDimension: "COLUMNS",
+                    fields: "valueRanges/values"
+                });
+
+                // Valida os dados recebidos
+                if (!apiResponse.valueRanges) {
+                    throw Error(`${log} - A API não retornou dados para os intervalos solicitados.`);
+                }
+
+                // Armazena os dados recebidos
+                let requestedData = apiResponse.valueRanges.map(range => range.values || []);
+
+                // Para cada linha
+                for (let [rowInd, id] of requestedData[0][0].entries()) {
+
+                    let obj = {}    // Cria objeto
+
+                    // Para cada coluna
+                    for (let [colInd, colName] of allCols.entries()) {
+                        // Adiciona valor no objeto
+                        let colValues = requestedData[colInd][0] || []; 
+                        obj[colName] = colValues[rowInd] ?? undefined
+                    }
+
+                    // Adiciona linha no Map
+                    this._data.set(String(id).trim(), obj)
+
+                }
+
                 break;
 
         }
 
-
-
-
-
-
-        if (this._fullLoad) {
-
-            let data_root = undefined                                     // Cria var para dados
-            try { data_root = this._table.getDataRange().getValues() }    // Obtém dados
-            catch (e) { throw Error(`Erro ao obter dados: ${e.stack}`) }    // Retorna outros erros
-
-            let data_keyIdx = data_root[0].indexOf(this._keyColumnName)
-            let data_headers = data_root
-
-        }
 
     }
 
 
 }
 
-
-let teste = new CodexWorker()
 
 
