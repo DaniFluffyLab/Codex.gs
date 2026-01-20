@@ -8,46 +8,6 @@
 class CodexWorker {
 
     /**
-    * Define a new status for the key.
-    * @param {string} key The key of the entry to update status.
-    * @param {string} newState The status of the key: "new", "modified", "deleted".
-    * @private
-    */
-    _markAs(key, newState) {
-
-        // Verifica se o estado solicitado é válido
-        const validStates = ["new", "modified", "deleted"];
-        if (!validStates.includes(newState)) throw Error("Not a valid state.")
-
-        // Obtém estado atual da chave
-        let actualState = this._keyStatus.get(key)
-
-        // Caso não possua estado definido, adicionar
-        if (actualState == undefined) {
-            this._keyStatus.set(key, newState)
-            return undefined
-        }
-
-        // Age conforme o estado atual
-        switch (actualState) {
-
-            case "new":
-                if (newState == "deleted") this._keyStatus.delete(key);
-                // if (newState == "modified") deve manter o estado como "new" 
-                break;
-
-            case "modified":
-                // if (newState == "add") não é uma operação válida
-                if (newState == "deleted") this._keyStatus.set(key, "deleted");
-                break;
-            case "deleted":
-                // Adicionar uma chave deletada a reativa modificando o valor.
-                if (newState == "new") this._keyStatus.set(key, "modified");
-            // if (newState == "modified") não reabilita a chave. 
-        }
-    }
-
-    /**
      * Commit all the alterations and delete this worker.
      */
     commit() { }
@@ -118,7 +78,7 @@ class CodexWorker {
         if (typeof Sheets === 'undefined') {
             throw new Error(
                 `[Codex] The "Google Sheets API" Advanced API is not enabled. ` +
-                `To use Codex library, you need to activate them with identifier "Sheets".` +
+                `To use Codex library, you need to activate it with identifier "Sheets".` +
                 `Documentation: https://developers.google.com/apps-script/guides/services/advanced`
             );
         }
@@ -126,17 +86,33 @@ class CodexWorker {
         /** @private Planilha origem */
         this._sheet;
 
+        /** @private ID da planilha origem */
+        this._sheetID = sheetId;
+
         /** @private Página na planilha */
         this._table;
+
+        /** @private Nome da página na planilha */
+        this._tableName = tableName;
 
         /** @private Nome no cabeçalho para coluna de keys */
         this._keyColumnName = keyColumnName
 
         /** @private Objeto de configurações */
         this._options = {
-            mode: "minimal", // minimal - filtered - full
-            filters: [], // Apenas caso mode = filtered
-            columns: [],
+
+            // minimal - filtered - full
+            mode: "minimal",
+
+            // Apenas caso mode = filtered
+            filters: [
+                // {column: "Nome da Coluna1", type: "regex", value: /\d{3}\.\d{3}\.\d{3}\-\d{2}/ },
+                // {column: "Nome da Coluna2", type: "partial-string", value: "alguma palavra" },
+                // {column: "Nome da Coluna2", type: "full-string", value: "alguma palavra" },
+            ],
+            columns: [
+                // "Nome da coluna 1", "Nome da coluna 2"...
+            ],
             ...options
         }
 
@@ -145,50 +121,39 @@ class CodexWorker {
 
         /** @private Set com keys carregadas */
         this._loadedkeys;
-        
+
         /** @private Map com todos os dados carregados */
         this._data = new Map();
 
         /** @private Set com keys alteradas */
         this._keyStatus = new Map();
 
-        let log = `[Codex] SheetID:"${sheetId}"; Table: "${tableName}"`
+        this._log = `[Codex] SheetID:"${this._sheetID}"; Table: "${this._tableName}"`
 
 
 
 
         // FASE 1 - CARREGA A API DO GOOGLE
 
-        try { this._sheet = SpreadsheetApp.openById(sheetId) }                          // Carrega planilha
-        catch (e) { throw Error(`${log} - Failed to load spreadsheet: ${e.stack}`) }    // Retorna erro
+        try { this._sheet = SpreadsheetApp.openById(this._sheetID) }                          // Carrega planilha
+        catch (e) { throw Error(`${this._log} - Failed to load spreadsheet: ${e.stack}`) }    // Retorna erro
 
-        try { this._table = this._sheet.getSheetByName(tableName) }                 // Carrega página
-        catch (e) { throw Error(`${log} - Failed to load sheet/tab: ${e.stack}`) }  // Retorna outros erros
+        try { this._table = this._sheet.getSheetByName(this._tableName) }                 // Carrega página
+        catch (e) { throw Error(`${this._log} - Failed to load sheet/tab: ${e.stack}`) }  // Retorna outros erros
 
         // Armazena tamanho da planilha
-        let shDims = { rows: this._table.getLastRow(), cols: this._table.getLastColumn() }
+        let shDims = { rows: this._table.getLastRow(), columns: this._table.getLastColumn() }
 
 
-        // FASE 2 - CARREGA COLUNAS
+        // FASE 2 - CARREGA COLUNAS E KEYS  
 
-        let colsNames;   // Cria Var para nomes das colunas
-        try {
-            let lastCol = shDims.cols                           // Obtém última coluna
-            if (lastCol == 0) throw Error("No columns found")   // Lança erro se sem colunas
-            colsNames = this._table.getRange(1, 1, 1, lastCol)  // Seleciona cabeçalho
-                .getValues()[0]                                 // Obtém dados
-        }
-        catch (e) { throw Error(`${log} - Error retrieving column data: ${e.stack}`) }  // Retorna erros
+        // Carrega dados de índices de colunas
+        let columnIndexes = this._getColumnIndexes()
 
-
-
-
-        // FASE 3 - CARREGA KEYS
-
-        let keys_colIdx;                                                            // Cria var para guardar índice
-        try { keys_colIdx = colsNames.indexOf(this._keyColumnName) }                // Procura pelo nome
-        catch (e) { throw Error(`${log} - Error locating keyColumn: ${e.stack}`) }  // Retorna outros erros
-        if (keys_colIdx == -1) throw Error(`${log} - keyColumn not found`)          // Se não achar coluna, lança erro
+        let keys_colIdx;                                                                    // Cria var para guardar índice
+        try { keys_colIdx = columnIndexes.get(this._keyColumnName) }                        // Procura pelo nome
+        catch (e) { throw Error(`${this._log} - Error locating keyColumn: ${e.stack}`) }    // Retorna outros erros
+        if (keys_colIdx == undefined) throw Error(`${this._log} - keyColumn not found`)     // Se não achar coluna, lança erro
 
         this._allkeys = new Set()      // Cria Set para guardar keys
         try {
@@ -203,34 +168,12 @@ class CodexWorker {
                 }
             }
         }
-        catch (e) { throw Error(`${log} - Error to get keys: ${e.stack}`) }  // Retorna outros erros
+        catch (e) { throw Error(`${this._log} - Error to get keys: ${e.stack}`) }  // Retorna outros erros
 
 
 
 
-        // FASE 4 - OBTÉM ÍNDICES DE COLUNAS  
-
-        let colsToAnalyze = new Set([keyColumnName, ...colsNames])          // Cria variável para array de colunas a analizar
-        let colsRanges = new Map()                                          // Cria Map para índices das colunas
-        let nameToIndex = new Map(colsNames.map((name, i) => [name, i]));   // Map temporário para armazenar índices originais
-
-        // Caso hajam parâmetros sobre quais colunas obter
-        if (this._options.columns.length != 0) {
-            let hasInvalid = this._options.columns.some(item => !colsToAnalyze.has(item));          // Verifica a validade das colunas
-            if (hasInvalid) throw Error(`${log} - One or more requested columns do not exist.`);    // Lança erro se inválido 
-            colsToAnalyze = new Set([keyColumnName, ...this._options.columns])                      // Prepara para analisar as colunas requisitadas
-        }
-
-        // Para cada coluna a analisar
-        colsToAnalyze.forEach(col => {
-            let index = nameToIndex.get(col);                                       // Obtém índice
-            if (colsRanges.has(col)) return;                                        // Caso coluna ja exista, ignorar
-            colsRanges.set(col, `'${tableName}'!R2C${index + 1}:C${index + 1}`);    // Armazena range
-        });
-
-
-
-        // FASE 5 - OBTEM DADOS
+        // FASE 3 - OBTEM DADOS
 
         switch (this._options.mode) {
 
@@ -240,65 +183,192 @@ class CodexWorker {
 
             // Modo filtrado
             case "filtered":
-                // ainda não sei
+
+                let rowsRanges = new Set();
+
+                columnIndexes.forEach()
+
+
                 break;
 
             case "full":
 
+                let colsRanges = new Map()      // Cria Map para índices das colunas
+
+
                 // Caso não tenha dados, ignorar
-                if (this._allkeys.size == 0) break;
+                if (this._allkeys.size === 0) break;
 
                 // Armazena os ranges em array
                 let allRanges = Array.from(colsRanges.values())
                 let allCols = Array.from(colsRanges.keys())
 
-                // Solicita a API os dados
-                let apiResponse = Sheets.Spreadsheets.Values.batchGet(sheetId, {
-                    ranges: allRanges,
-                    valueRenderOption: "UNFORMATTED_VALUE",
-                    dateTimeRenderOption: "FORMATTED_STRING",
-                    majorDimension: "COLUMNS",
-                    fields: "valueRanges/values"
-                });
 
-                // Valida os dados recebidos
-                if (!apiResponse.valueRanges) {
-                    throw Error(`${log} - API returned no data for the requested ranges.`);
-                }
-
-                // Armazena os dados recebidos
-                let requestedData = apiResponse.valueRanges.map(range => range.values || []);
-
-                // Para cada linha
-                for (let [rowInd, id] of requestedData[0][0].entries()) {
-
-                    let obj = {}    // Cria objeto
-
-                    // Verifica se um ID não é nulo
-                    if (!id) continue
-
-                    // Para cada coluna
-                    for (let [colInd, colName] of allCols.entries()) {
-                        // Adiciona valor no objeto
-                        let colValues = requestedData[colInd][0] || []; 
-                        obj[colName] = colValues[rowInd] ?? undefined
-                    }
-
-                    // Adiciona linha no Map
-                    this._data.set(String(id).trim(), obj)
-                }
-
-                // Informa ao objeto de chaves carregadas todas as chaves do documento                
-                this._loadedkeys = new Set(this._data.keys())
 
                 break;
+        }
+    }
 
+    /**
+     * Retrieves column indexes from the sheet and applies selection filters.
+     *
+     * This method reads the table header (row 1) and maps each column name to its 
+     * 0-based index. If specific columns are defined in the options, the resulting 
+     * Map will contain only those columns and the mandatory key column.
+     *
+     * @private
+     * @returns {Map<string, number>} A Map where the key is the column name and the value is the column index.
+     * @throws {Error} Throws an error if the sheet has no columns or if a column requested in the options is not found.
+     */
+    _getColumnIndexes() {
+
+        let columnIndexes;                                              // Cria var para índices das colunas
+        let lastColumn = this._table.getLastColumn()                    // Obtém última coluna
+        if (lastColumn == 0) throw Error(`${this._log} - No columns found`)            // Lança erro se sem colunas
+        let columnArray = this._table.getRange(1, 1, 1, lastColumn)     // Seleciona cabeçalho
+            .getValues()[0]                                             // Obtém dados
+        columnIndexes = new Map(columnArray.map((v, i) => [v, i]))      // Insere dados dos índices no Map
+
+        // Caso hajam parâmetros sobre quais colunas obter
+        if (this._options.columns.length != 0) {
+            let hasInvalid = this._options.columns.some(item => !columnIndexes.has(item));          // Verifica a validade das colunas
+            if (hasInvalid) throw Error(`${this._log} - One or more requested columns do not exist.`);    // Lança erro se inválido 
+            let filteredColumnIndexes = new Map()                                                   // Cria Map para colunas filtradas
+            filteredColumnIndexes.set(this._keyColumnName, columnIndexes.get(this._keyColumnName))  // Garante coluna de ID
+            for (let columnName of this._options.columns) {                                         // Para cada coluna requisitada:
+                filteredColumnIndexes.set(columnName, columnIndexes.get(columnName))                    // Armazena seu valor no Map de filtradas
+            }
+            columnIndexes = filteredColumnIndexes                                                   // Atualiza var de retorno
         }
 
+        // Retorna array de índices
+        return columnIndexes
+    }
+
+
+    _fetchNewData(requestedRows, columnIndexes) {
+
+        // Valida parâmetros
+        if (!Array.isArray(requestedRows) && requestedRows != true) throw Error(`${this._log} - Invalid requestedRows.`)
+
+        let ranges = new Map()                                      // Define variável para ranges a serem requeridos
+        let mode = Array.isArray(requestedRows) ? "rows" || "full"  // Define modo de execução
+
+
+
+
+        // PAREI AQUI - 20/11/2025
+
+
+
+
+
+
+
+
+        // Caso não informado os índices de colunas, obter
+        if (columnIndexes == undefined) columnIndexes = this._getColumnIndexes()
+
+
+        // Para cada coluna a analisar
+        columnIndexes.forEach((index, col) => {
+            colsRanges.set(col, `'${this._tableName}'!R2C${index + 1}:C${index + 1}`);  // Armazena range
+        });
+
+
+        // Solicita a API os dados
+        let apiResponse = Sheets.Spreadsheets.Values.batchGet(this._sheetID, {
+            ranges: requestedRanges,
+            valueRenderOption: "UNFORMATTED_VALUE",
+            dateTimeRenderOption: "FORMATTED_STRING",
+            majorDimension: "COLUMNS",
+            fields: "valueRanges/values"
+        });
+
+        // Valida os dados recebidos
+        if (!apiResponse.valueRanges) {
+            throw Error(`${this._log} - API returned no data for the requested ranges.`);
+        }
+
+        // Armazena os dados recebidos
+        let requestedData = apiResponse.valueRanges.map(range => range.values || []);
+
+        // Para cada linha
+        for (let [rowInd, id] of requestedData[0][0].entries()) {
+
+            let obj = {}    // Cria objeto
+
+            // Verifica se um ID não é nulo
+            if (id === "" || id === null || id === undefined) continue
+
+            // Para cada coluna
+            for (let [colInd, colName] of columnIndexes.entries()) {
+                // Adiciona valor no objeto
+                let colValues = requestedData[colInd][0] || [];
+                obj[colName] = colValues[rowInd] ?? undefined
+            }
+
+            // Adiciona linha no Map
+            this._data.set(String(id).trim(), obj)
+            this._loadedkeys.add(String(id).trim())
+        }
 
     }
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    /**
+    * Define a new status for the key.
+    * @param {string} key The key of the entry to update status.
+    * @param {string} newState The status of the key: "new", "modified", "deleted".
+    * @private
+    */
+    _markAs(key, newState) {
+
+        // Verifica se o estado solicitado é válido
+        const validStates = ["new", "modified", "deleted"];
+        if (!validStates.includes(newState)) throw Error("Not a valid state.")
+
+        // Obtém estado atual da chave
+        let actualState = this._keyStatus.get(key)
+
+        // Caso não possua estado definido, adicionar
+        if (actualState == undefined) {
+            this._keyStatus.set(key, newState)
+            return undefined
+        }
+
+        // Age conforme o estado atual
+        switch (actualState) {
+
+            case "new":
+                if (newState == "deleted") this._keyStatus.delete(key);
+                // if (newState == "modified") deve manter o estado como "new" 
+                break;
+
+            case "modified":
+                // if (newState == "add") não é uma operação válida
+                if (newState == "deleted") this._keyStatus.set(key, "deleted");
+                break;
+            case "deleted":
+                // Adicionar uma chave deletada a reativa modificando o valor.
+                if (newState == "new") this._keyStatus.set(key, "modified");
+            // if (newState == "modified") não reabilita a chave. 
+        }
+    }
 }
 
 
