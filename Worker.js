@@ -117,10 +117,9 @@ class CodexWorker {
         // FASE 0 - VALIDAÇÃO DE DEPENDÊNCIAS E DEFINIÇÃO DE VARS GLOBAIS
         if (typeof Sheets === 'undefined') {
             throw new Error(
-                `[Codex] O Serviço Avançado "Google Sheets API" não está ativo. ` +
-                `Para utilizar a biblioteca Codex, ative-o com o identificador "Sheets" em: ` +
-                `Editor do GAS > Serviços (+) > Google Sheets API. ` +
-                `Documentação: https://developers.google.com/apps-script/guides/services/advanced`
+                `[Codex] The "Google Sheets API" Advanced API is not enabled. ` +
+                `To use Codex library, you need to activate them with identifier "Sheets".` +
+                `Documentation: https://developers.google.com/apps-script/guides/services/advanced`
             );
         }
 
@@ -161,10 +160,10 @@ class CodexWorker {
         // FASE 1 - CARREGA A API DO GOOGLE
 
         try { this._sheet = SpreadsheetApp.openById(sheetId) }                          // Carrega planilha
-        catch (e) { throw Error(`${log} - Erro ao carregar a planilha: ${e.stack}`) }   // Retorna erro
+        catch (e) { throw Error(`${log} - Failed to load spreadsheet: ${e.stack}`) }    // Retorna erro
 
         try { this._table = this._sheet.getSheetByName(tableName) }                 // Carrega página
-        catch (e) { throw Error(`${log} - Erro ao carregar a página: ${e.stack}`) } // Retorna outros erros
+        catch (e) { throw Error(`${log} - Failed to load sheet/tab: ${e.stack}`) }  // Retorna outros erros
 
         // Armazena tamanho da planilha
         let shDims = { rows: this._table.getLastRow(), cols: this._table.getLastColumn() }
@@ -175,21 +174,21 @@ class CodexWorker {
         let colsNames;   // Cria Var para nomes das colunas
         try {
             let lastCol = shDims.cols                           // Obtém última coluna
-            if (lastCol == 0) throw Error("Não há colunas")     // Lança erro se sem colunas
+            if (lastCol == 0) throw Error("No columns found")   // Lança erro se sem colunas
             colsNames = this._table.getRange(1, 1, 1, lastCol)  // Seleciona cabeçalho
                 .getValues()[0]                                 // Obtém dados
         }
-        catch (e) { throw Error(`${log} - Erro ao obter dados das colunas: ${e.stack}`) }  // Retorna erros
+        catch (e) { throw Error(`${log} - Error retrieving column data: ${e.stack}`) }  // Retorna erros
 
 
 
 
         // FASE 3 - CARREGA KEYS
 
-        let keys_colIdx;                                                                    // Cria var para guardar índice
-        try { keys_colIdx = colsNames.indexOf(this._keyColumnName) }                        // Procura pelo nome
-        catch (e) { throw Error(`${log} - Erro ao procurar pela keyColumn: ${e.stack}`) }   // Retorna outros erros
-        if (keys_colIdx == -1) throw Error(`${log} - keyColumn não encontrada`)             // Se não achar coluna, lança erro
+        let keys_colIdx;                                                            // Cria var para guardar índice
+        try { keys_colIdx = colsNames.indexOf(this._keyColumnName) }                // Procura pelo nome
+        catch (e) { throw Error(`${log} - Error locating keyColumn: ${e.stack}`) }  // Retorna outros erros
+        if (keys_colIdx == -1) throw Error(`${log} - keyColumn not found`)          // Se não achar coluna, lança erro
 
         this._allkeys = new Set()      // Cria Set para guardar keys
         try {
@@ -204,7 +203,7 @@ class CodexWorker {
                 }
             }
         }
-        catch (e) { throw Error(`${log} - Erro ao obter keys: ${e.stack}`) }  // Retorna outros erros
+        catch (e) { throw Error(`${log} - Error to get keys: ${e.stack}`) }  // Retorna outros erros
 
 
 
@@ -217,9 +216,9 @@ class CodexWorker {
 
         // Caso hajam parâmetros sobre quais colunas obter
         if (this._options.columns.length != 0) {
-            let hasInvalid = this._options.columns.some(item => !colsToAnalyze.has(item));      // Verifica a validade das colunas
-            if (hasInvalid) throw Error(`${log} - Foram solicitadas colunas inexitentes.`);     // Lança erro se inválido 
-            colsToAnalyze = new Set([keyColumnName, ...this._options.columns])                  // Prepara para analisar as colunas requisitadas
+            let hasInvalid = this._options.columns.some(item => !colsToAnalyze.has(item));          // Verifica a validade das colunas
+            if (hasInvalid) throw Error(`${log} - One or more requested columns do not exist.`);    // Lança erro se inválido 
+            colsToAnalyze = new Set([keyColumnName, ...this._options.columns])                      // Prepara para analisar as colunas requisitadas
         }
 
         // Para cada coluna a analisar
@@ -264,7 +263,7 @@ class CodexWorker {
 
                 // Valida os dados recebidos
                 if (!apiResponse.valueRanges) {
-                    throw Error(`${log} - A API não retornou dados para os intervalos solicitados.`);
+                    throw Error(`${log} - API returned no data for the requested ranges.`);
                 }
 
                 // Armazena os dados recebidos
@@ -275,6 +274,9 @@ class CodexWorker {
 
                     let obj = {}    // Cria objeto
 
+                    // Verifica se um ID não é nulo
+                    if (!id) continue
+
                     // Para cada coluna
                     for (let [colInd, colName] of allCols.entries()) {
                         // Adiciona valor no objeto
@@ -284,8 +286,10 @@ class CodexWorker {
 
                     // Adiciona linha no Map
                     this._data.set(String(id).trim(), obj)
-
                 }
+
+                // Informa ao objeto de chaves carregadas todas as chaves do documento                
+                this._loadedkeys = new Set(this._data.keys())
 
                 break;
 
