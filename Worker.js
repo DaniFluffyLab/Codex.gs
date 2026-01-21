@@ -296,9 +296,16 @@ class CodexWorker {
 
             case "COLUMNS":
 
-                let columnsData = APIresponse.valueRanges.map(range => (range.valueRange.values && range.valueRange.values[0]) ? range.valueRange.values[0] : [])    // Prepara dados para leitura
-                let cleanedApiColumns = [...requestedData.keys()].map(name => String(name).trim())   // Obtém, no contexto da request, o nome e a ordem das colunas
-                let idColumn = columnsData[[...requestedData.keys()].indexOf(this._keyColumnName)]   // Obtém a coluna de ID
+                // Prepara dados da coluna em um map cuja key é o índice da coluna 
+                let columnsData = new Map(
+                    APIresponse.valueRanges.map(range => {
+                        let key = range.dataFilters[0].gridRange.startColumnIndex
+                        let value = (range.valueRange.values && range.valueRange.values[0]) ? range.valueRange.values[0] : []
+                        return [key, value]
+                    })
+                )
+
+                let idColumn = columnsData.get(columnIndexes.get(this._keyColumnName))  // Obtém a coluna de ID
 
                 // Para cada linha recebida
                 idColumn.forEach((id, rowInd) => {
@@ -306,8 +313,8 @@ class CodexWorker {
                     if (id === undefined || id === null || String(id).trim() === "") return;    // Ignora linhas sem ID
                     let obj = {}                                                                // Cria um objeto de saída
 
-                    // Para cada coluna recebida, cria a propriedade e armazena o valor no objeto
-                    columnsData.forEach((column, colInd) => obj[cleanedApiColumns[colInd]] = column[rowInd] ?? null)
+                    // Para cada coluna solicitada, cria a propriedade e armazena o valor no objeto
+                    columnIndexes.forEach((colIndex, colName) => obj[colName] = columnsData.get(colIndex)[rowInd] ?? null)
 
                     // Armazena resutados
                     this._data.set(String(id).trim(), obj)
@@ -315,6 +322,9 @@ class CodexWorker {
                     this._allkeys.add(String(id).trim())
                 })
                 break;
+
+/*          
+            NAO TESTADO AINDA.
 
             case "ROWS":
 
@@ -336,7 +346,7 @@ class CodexWorker {
                     this._loadedkeys.add(String(row[idIndex]).trim())
                     this._allkeys.add(String(row[idIndex]).trim())
                 })
-                break;
+                break; */
         }
     }
 }
