@@ -7,224 +7,204 @@
 
 class CodexWorker {
 
-    /**
-     * Commit all the alterations and delete this worker.
-     */
-    commit() { }
-
-    /**
-     * Generate a new random unique hex value for use as key in this data.
-     * @returns {string} A new random unique key 
-     */
-    genKey() { }
-
-    /**
-     * Returns a boolean value indicating whether an entry with the specified key
-     * exists in this data or not.
-     * 
-     * @param {string} key The key of the entry to test for presence.
-     * @returns {bool} Returns "true" if an entry with the specified key exists
-     * in the data; otherwise "false".
-     */
-    has(key) { }
-
-    /**
-     * Returns the value corresponding to the key in this data, or undefined
-     * if there is none.
-     * 
-     * @param {string} key The key of the value to return from the data.
-     * 
-     * @returns The value associated with the specified key in the data.
-     * If the key can't be founded, "undefined" is returned.
-     */
-    get(key) { }
-
-    /**
-     * Adds a new entry with a specified key and value to this data, or updates an
-     * existing entry if the key already exists.
-     * 
-     * @param {string} key The key of the entry to add to or modify within the data.
-     * @param {*} value The value of the entry to add or modify within the data.
-     */
-    set(key, value) { }
-
-    /** 
-     * Removes the entry specified by the key from this data.
-     * 
-     * @param {string} key The key of the entry to remove from the data. 
-     * 
-     * @returns {bool} "true" if an entry in the data has been removed succesfully.
-     * "false" if the key is not found in the data.
-     */
-    delete(key) { }
-
-    /** 
-     * Removes all values from data.
-     */
-    clear() { }
-
-    /**
-     * Returns a new Iterator object that contains the keys for each element in the 
-     * data in insertion order.
-     * @returns A new iterable iterator object.
-     */
-    keys() { }
-
-
-
     constructor(sheetId, tableName, keyColumnName, options) {
 
+
         // FASE 0 - VALIDAÇÃO DE DEPENDÊNCIAS E DEFINIÇÃO DE VARS GLOBAIS
+
         if (typeof Sheets === 'undefined') {
             throw new Error(
                 `[Codex] The "Google Sheets API" Advanced API is not enabled. ` +
                 `To use Codex library, you need to activate it with identifier "Sheets".` +
                 `Documentation: https://developers.google.com/apps-script/guides/services/advanced`
             );
-        }
+        };
 
-        /** @private Planilha origem */
-        this._sheet;
 
-        /** @private ID da planilha origem */
+        /**
+         * O identificador único (ID) da planilha de origem.
+         * @type {string}
+         * @private
+         */
         this._sheetID = sheetId;
 
-        /** @private Página na planilha */
-        this._table;
 
-        /** @private Nome da página na planilha */
+        /**
+         * A instância da planilha (arquivo) do Google Sheets.
+         * @type {GoogleAppsScript.Spreadsheet.Spreadsheet}
+         * @private
+         */
+        this._sheet;                                                                        // Declara variável
+        try { this._sheet = SpreadsheetApp.openById(this._sheetID) }                        // Carrega planilha
+        catch (e) { throw Error(`${this._log} - Failed to load spreadsheet: ${e.stack}`) }; // Retorna algum erro
+
+
+        /**
+         * O nome da aba (página) dentro da planilha que será manipulada.
+         * @type {string}
+         * @private
+         */
         this._tableName = tableName;
 
-        /** @private Nome no cabeçalho para coluna de keys */
-        this._keyColumnName = keyColumnName
 
-        /** @private Objeto de configurações */
+        /**
+         * A aba específica dentro da planilha que servirá como tabela.
+         * @type {GoogleAppsScript.Spreadsheet.Sheet}
+         * @private
+         */
+        this._table;                                                                        // Declara variável
+        try { this._table = this._sheet.getSheetByName(this._tableName) }                   // Carrega página
+        catch (e) { throw Error(`${this._log} - Failed to load sheet/tab: ${e.stack}`) };   // Retorna outros erros
+
+
+        /**
+         * O identificador numérico único (GID) da aba dentro da planilha.
+         * @type {number}
+         * @private
+         */
+        this._tableID = this._table.getSheetId();
+
+
+        /**
+         * O nome do cabeçalho da coluna utilizada como chave primária (ID).
+         * @type {string}
+         * @private
+         */
+        this._keyColumnName = keyColumnName;
+
+
+        /**
+         * Objeto de configurações da instância do Worker.
+         * @type {{
+         * mode: ("minimal"|"full"),
+         * columns: string[]
+         * }}
+         * @private
+         */
         this._options = {
-
-            // minimal - filtered - full
             mode: "minimal",
+            columns: [],
+            ...options 
+        };
 
-            // Apenas caso mode = filtered
-            filters: [
-                // {column: "Nome da Coluna1", type: "regex", value: /\d{3}\.\d{3}\.\d{3}\-\d{2}/ },
-                // {column: "Nome da Coluna2", type: "partial-string", value: "alguma palavra" },
-                // {column: "Nome da Coluna2", type: "full-string", value: "alguma palavra" },
-            ],
-            columns: [
-                // "Nome da coluna 1", "Nome da coluna 2"...
-            ],
-            ...options
-        }
 
-        /** @private Set com todas as keys */
-        this._allkeys;
+        /**
+         * Conjunto contendo todas as chaves (IDs) identificadas na planilha.
+         * Utilizado para verificar a existência de registros sem necessariamente carregar seus dados.
+         * @type {Set<string>}
+         * @private
+         */
+        this._allkeys = new Set();
 
-        /** @private Set com keys carregadas */
-        this._loadedkeys;
 
-        /** @private Map com todos os dados carregados */
+        /**
+         * Conjunto contendo as chaves (IDs) cujos dados completos já foram carregados em memória.
+         * @type {Set<string>}
+         * @private
+         */
+        this._loadedkeys = new Set();
+
+
+        /**
+         * Mapa contendo os registros carregados da planilha.
+         * Associa cada identificador único (ID) ao seu respectivo objeto de dados de linha.
+         * @type {Map<string, Object>}
+         * @private
+         */
         this._data = new Map();
 
-        /** @private Set com keys alteradas */
+
+        /**
+         * Mapa que rastreia o status de sincronização das chaves alteradas na transação atual.
+         * Associa o ID do registro ao seu estado pendente para o próximo commit.
+         * @type {Map<string, ("new"|"modified"|"deleted")>}
+         * @private
+         */
         this._keyStatus = new Map();
 
-        this._log = `[Codex] SheetID:"${this._sheetID}"; Table: "${this._tableName}"`
 
+        /**
+         * Prefixo identificador utilizado em mensagens de log e erros da instância.
+         * @type {string}
+         * @private
+         */
+        this._log = `[Codex] SheetID:"${this._sheetID}"; Table: "${this._tableName}"`;
 
-
-
-        // FASE 1 - CARREGA A API DO GOOGLE
-
-        try { this._sheet = SpreadsheetApp.openById(this._sheetID) }                          // Carrega planilha
-        catch (e) { throw Error(`${this._log} - Failed to load spreadsheet: ${e.stack}`) }    // Retorna erro
-
-        try { this._table = this._sheet.getSheetByName(this._tableName) }                 // Carrega página
-        catch (e) { throw Error(`${this._log} - Failed to load sheet/tab: ${e.stack}`) }  // Retorna outros erros
-
-        // Armazena tamanho da planilha
-        let shDims = { rows: this._table.getLastRow(), columns: this._table.getLastColumn() }
-
-
-        // FASE 2 - CARREGA COLUNAS E KEYS  
 
         // Carrega dados de índices de colunas
         let columnIndexes = this._getColumnIndexes()
 
-        let keys_colIdx;                                                                    // Cria var para guardar índice
-        try { keys_colIdx = columnIndexes.get(this._keyColumnName) }                        // Procura pelo nome
-        catch (e) { throw Error(`${this._log} - Error locating keyColumn: ${e.stack}`) }    // Retorna outros erros
-        if (keys_colIdx == undefined) throw Error(`${this._log} - keyColumn not found`)     // Se não achar coluna, lança erro
-
-        this._allkeys = new Set()      // Cria Set para guardar keys
-        try {
-            let lastRow = shDims.rows                                       // Obtém última linha
-            if (lastRow >= 2) {                                             // Se planilha não está vazia
-                let keys_rawValues = this._table                            // Acessa tabela
-                    .getRange(2, keys_colIdx + 1, lastRow - 1, 1)           // Seleciona coluna de keys
-                    .getValues()                                            // Obtém matriz
-                for (let [k] of keys_rawValues) {                           // Para cada key
-                    if (k == "" || k == null || k == undefined) continue    // Ignora keys vazias
-                    this._allkeys.add(String(k).trim())                     // Adiciona Key ao Set mestre
-                }
-            }
-        }
-        catch (e) { throw Error(`${this._log} - Error to get keys: ${e.stack}`) }  // Retorna outros erros
 
 
-
-
-        // FASE 3 - OBTEM DADOS
+        // Obtém dados baseados no modo de operação
 
         switch (this._options.mode) {
 
-            // Modo mínimo
             case "minimal":
+
+                let keys_colIdx;                                                                    // Cria var para guardar índice
+                try { keys_colIdx = columnIndexes.get(this._keyColumnName) }                        // Procura pelo nome
+                catch (e) { throw Error(`${this._log} - Error locating keyColumn: ${e.stack}`) }    // Retorna outros erros
+                if (keys_colIdx == undefined) throw Error(`${this._log} - keyColumn not found`)     // Se não achar coluna, lança erro
+
+                try {
+                    let lastRow = this._table.getLastRow()      // Obtém última linha
+                    if (lastRow >= 2) {                         // Se planilha não está vazia
+
+                        // Efetua request na API
+                        let keys_rawValues = Sheets.Spreadsheets.Values.batchGetByDataFilter(
+                            {
+                                dataFilters: [{
+                                    gridRange: {
+                                        sheetId: this._tableID,
+                                        startRowIndex: 1,
+                                        startColumnIndex: keys_colIdx,
+                                        endRowIndex: lastRow,
+                                        endColumnIndex: keys_colIdx + 1
+                                    }
+                                }],
+                                majorDimension: "COLUMNS",
+                                valueRenderOption: "UNFORMATTED_VALUE",
+                                dateTimeRenderOption: "FORMATTED_STRING"
+                            },
+                            this._sheetID,
+                        ).valueRanges[0].valueRange.values[0]
+
+
+                        for (let k of keys_rawValues) {                             // Para cada key
+                            if (k == "" || k == null || k == undefined) continue    // Ignora keys vazias
+                            this._allkeys.add(String(k).trim())                     // Adiciona Key ao Set mestre
+                        }
+                    }
+                }
+                catch (e) { throw Error(`${this._log} - Error to get keys: ${e.stack}`) }  // Retorna outros erros
                 break;
 
-            // Modo filtrado
-            case "filtered":
-
-                let rowsRanges = new Set();
-
-                columnIndexes.forEach()
-
-
-                break;
 
             case "full":
 
-                let colsRanges = new Map()      // Cria Map para índices das colunas
-
-
-                // Caso não tenha dados, ignorar
-                if (this._allkeys.size === 0) break;
-
-                // Armazena os ranges em array
-                let allRanges = Array.from(colsRanges.values())
-                let allCols = Array.from(colsRanges.keys())
-
-
-
+                try { this._fetchNewData(true, columnIndexes) }                                 // Requisita dados
+                catch (e) { throw Error(`${this._log} - Error to get values: ${e.stack}`) }     // Retorna erros
                 break;
         }
+
+
+
     }
 
     /**
-     * Retrieves column indexes from the sheet and applies selection filters.
-     *
-     * This method reads the table header (row 1) and maps each column name to its 
-     * 0-based index. If specific columns are defined in the options, the resulting 
-     * Map will contain only those columns and the mandatory key column.
-     *
+     * Mapeia os nomes das colunas da planilha para seus respectivos índices numéricos (0-based).
+     * Realiza a leitura do cabeçalho (linha 1) e valida as colunas solicitadas nas configurações, 
+     * garantindo que a coluna de chave primária esteja sempre presente no mapeamento.
+     * * @returns {Map<string, number>} Um Map onde a chave é o nome da coluna (header) e o valor é o seu índice físico (0-based).
+     * @throws {Error} Lança erro se a planilha não contiver colunas ou se uma coluna solicitada nas configurações não existir.
      * @private
-     * @returns {Map<string, number>} A Map where the key is the column name and the value is the column index.
-     * @throws {Error} Throws an error if the sheet has no columns or if a column requested in the options is not found.
      */
     _getColumnIndexes() {
 
         let columnIndexes;                                              // Cria var para índices das colunas
         let lastColumn = this._table.getLastColumn()                    // Obtém última coluna
-        if (lastColumn == 0) throw Error(`${this._log} - No columns found`)            // Lança erro se sem colunas
+        if (lastColumn == 0) throw Error(`No columns found`)            // Lança erro se sem colunas
         let columnArray = this._table.getRange(1, 1, 1, lastColumn)     // Seleciona cabeçalho
             .getValues()[0]                                             // Obtém dados
         columnIndexes = new Map(columnArray.map((v, i) => [v, i]))      // Insere dados dos índices no Map
@@ -232,7 +212,7 @@ class CodexWorker {
         // Caso hajam parâmetros sobre quais colunas obter
         if (this._options.columns.length != 0) {
             let hasInvalid = this._options.columns.some(item => !columnIndexes.has(item));          // Verifica a validade das colunas
-            if (hasInvalid) throw Error(`${this._log} - One or more requested columns do not exist.`);    // Lança erro se inválido 
+            if (hasInvalid) throw Error(`One or more requested columns do not exist.`);             // Lança erro se inválido 
             let filteredColumnIndexes = new Map()                                                   // Cria Map para colunas filtradas
             filteredColumnIndexes.set(this._keyColumnName, columnIndexes.get(this._keyColumnName))  // Garante coluna de ID
             for (let columnName of this._options.columns) {                                         // Para cada coluna requisitada:
@@ -245,128 +225,118 @@ class CodexWorker {
         return columnIndexes
     }
 
-
+    /**
+     * Requisita novos dados da planilha via API avançada e realiza o pivoteamento para o cache interno.
+     * Suporta busca por colunas completas (modo COLUMNS) ou por linhas específicas (modo ROWS).
+     * * @param {number[]|boolean} requestedRows - Array com índices de linhas (1-based) para busca seletiva, 
+     * ou true para realizar a requisição de colunas completas.
+     * @param {Map<string, number>} [columnIndexes] - Mapa contendo os nomes das colunas e seus respectivos 
+     * índices. Caso omitido, utiliza o mapeamento padrão da instância.
+     * @throws {Error} Se o parâmetro requestedRows não for um array nem o valor booleano true.
+     * @private
+     */
     _fetchNewData(requestedRows, columnIndexes) {
 
         // Valida parâmetros
-        if (!Array.isArray(requestedRows) && requestedRows != true) throw Error(`${this._log} - Invalid requestedRows.`)
+        if (!Array.isArray(requestedRows) && requestedRows != true) throw Error(`Invalid requestedRows.`)
 
-        let ranges = new Map()                                      // Define variável para ranges a serem requeridos
-        let mode = Array.isArray(requestedRows) ? "rows" || "full"  // Define modo de execução
+        let requestedData = new Map()                                               // Informações de dados a serem requeridos para a API
+        let mode = Array.isArray(requestedRows) ? "ROWS" : "COLUMNS"                // Define modo de execução
+        if (columnIndexes == undefined) columnIndexes = this._getColumnIndexes()    // Obtém índices de colunas, caso não recebido
 
+        // Monta os objetos de requisição
+        switch (mode) {
 
-
-
-        // PAREI AQUI - 20/11/2025
-
-
-
-
-
-
-
-
-        // Caso não informado os índices de colunas, obter
-        if (columnIndexes == undefined) columnIndexes = this._getColumnIndexes()
-
-
-        // Para cada coluna a analisar
-        columnIndexes.forEach((index, col) => {
-            colsRanges.set(col, `'${this._tableName}'!R2C${index + 1}:C${index + 1}`);  // Armazena range
-        });
-
-
-        // Solicita a API os dados
-        let apiResponse = Sheets.Spreadsheets.Values.batchGet(this._sheetID, {
-            ranges: requestedRanges,
-            valueRenderOption: "UNFORMATTED_VALUE",
-            dateTimeRenderOption: "FORMATTED_STRING",
-            majorDimension: "COLUMNS",
-            fields: "valueRanges/values"
-        });
-
-        // Valida os dados recebidos
-        if (!apiResponse.valueRanges) {
-            throw Error(`${this._log} - API returned no data for the requested ranges.`);
-        }
-
-        // Armazena os dados recebidos
-        let requestedData = apiResponse.valueRanges.map(range => range.values || []);
-
-        // Para cada linha
-        for (let [rowInd, id] of requestedData[0][0].entries()) {
-
-            let obj = {}    // Cria objeto
-
-            // Verifica se um ID não é nulo
-            if (id === "" || id === null || id === undefined) continue
-
-            // Para cada coluna
-            for (let [colInd, colName] of columnIndexes.entries()) {
-                // Adiciona valor no objeto
-                let colValues = requestedData[colInd][0] || [];
-                obj[colName] = colValues[rowInd] ?? undefined
-            }
-
-            // Adiciona linha no Map
-            this._data.set(String(id).trim(), obj)
-            this._loadedkeys.add(String(id).trim())
-        }
-
-    }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    /**
-    * Define a new status for the key.
-    * @param {string} key The key of the entry to update status.
-    * @param {string} newState The status of the key: "new", "modified", "deleted".
-    * @private
-    */
-    _markAs(key, newState) {
-
-        // Verifica se o estado solicitado é válido
-        const validStates = ["new", "modified", "deleted"];
-        if (!validStates.includes(newState)) throw Error("Not a valid state.")
-
-        // Obtém estado atual da chave
-        let actualState = this._keyStatus.get(key)
-
-        // Caso não possua estado definido, adicionar
-        if (actualState == undefined) {
-            this._keyStatus.set(key, newState)
-            return undefined
-        }
-
-        // Age conforme o estado atual
-        switch (actualState) {
-
-            case "new":
-                if (newState == "deleted") this._keyStatus.delete(key);
-                // if (newState == "modified") deve manter o estado como "new" 
+            case "COLUMNS":
+                let lastRow = this._table.getLastRow();
+                for (let [colName, colIndex] of columnIndexes) {
+                    requestedData.set(colName, {
+                        gridRange: {
+                            sheetId: this._tableID,
+                            startRowIndex: 1,
+                            startColumnIndex: colIndex,
+                            endRowIndex: lastRow,
+                            endColumnIndex: colIndex + 1
+                        }
+                    })
+                }
                 break;
 
-            case "modified":
-                // if (newState == "add") não é uma operação válida
-                if (newState == "deleted") this._keyStatus.set(key, "deleted");
+            case "ROWS":
+                let firstCol = Math.min(...columnIndexes.values())
+                let lastCol = Math.max(...columnIndexes.values())
+                for (let rowIndex of requestedRows) {
+                    requestedData.set(rowIndex, {
+                        gridRange: {
+                            sheetId: this._tableID,
+                            startRowIndex: rowIndex - 1,
+                            endRowIndex: rowIndex,
+                            startColumnIndex: firstCol,
+                            endColumnIndex: lastCol + 1
+                        }
+                    })
+                };
                 break;
-            case "deleted":
-                // Adicionar uma chave deletada a reativa modificando o valor.
-                if (newState == "new") this._keyStatus.set(key, "modified");
-            // if (newState == "modified") não reabilita a chave. 
+
+        }
+
+        // Executa a requisição
+        const APIresponse = Sheets.Spreadsheets.Values.batchGetByDataFilter(
+            {
+                dataFilters: [...requestedData.values()],
+                majorDimension: mode,
+                valueRenderOption: "UNFORMATTED_VALUE",
+                dateTimeRenderOption: "FORMATTED_STRING"
+            },
+            this._sheetID,
+        )
+
+        // Executa o pivoteamento dos dados
+        switch (mode) {
+
+            case "COLUMNS":
+
+                let columnsData = APIresponse.valueRanges.map(range => (range.valueRange.values && range.valueRange.values[0]) ? range.valueRange.values[0] : [])    // Prepara dados para leitura
+                let cleanedApiColumns = [...requestedData.keys()].map(name => String(name).trim())   // Obtém, no contexto da request, o nome e a ordem das colunas
+                let idColumn = columnsData[[...requestedData.keys()].indexOf(this._keyColumnName)]   // Obtém a coluna de ID
+
+                // Para cada linha recebida
+                idColumn.forEach((id, rowInd) => {
+
+                    if (id === undefined || id === null || String(id).trim() === "") return;    // Ignora linhas sem ID
+                    let obj = {}                                                                // Cria um objeto de saída
+
+                    // Para cada coluna recebida, cria a propriedade e armazena o valor no objeto
+                    columnsData.forEach((column, colInd) => obj[cleanedApiColumns[colInd]] = column[rowInd] ?? null)
+
+                    // Armazena resutados
+                    this._data.set(String(id).trim(), obj)
+                    this._loadedkeys.add(String(id).trim())
+                    this._allkeys.add(String(id).trim())
+                })
+                break;
+
+            case "ROWS":
+
+                let rowsData = APIresponse.valueRanges.map(range => (range.valueRange.values && range.valueRange.values[0]) ? range.valueRange.values[0] : [])   // Prepara dados para leitura
+                let colOffset = Math.min(...columnIndexes.values())                                                             // Obtém o offset de colunas
+                let idIndex = columnIndexes.get(this._keyColumnName) - colOffset                                                // Obtém o índice do ID
+
+                // Para cada linha recebida
+                rowsData.forEach(row => {
+
+                    if (row[idIndex] === undefined || row[idIndex] === null || String(row[idIndex]).trim() === "") return;  // Ignora linhas sem ID
+                    let obj = {}                                                                                            // Cria um objeto de saída
+
+                    // Para cada coluna solicitada, cria a propriedade e armazena o valor no objeto
+                    columnIndexes.forEach((colInd, colName) => obj[String(colName).trim()] = row[colInd - colOffset] ?? null)
+
+                    // Armazena resutados
+                    this._data.set(String(row[idIndex]).trim(), obj)
+                    this._loadedkeys.add(String(row[idIndex]).trim())
+                    this._allkeys.add(String(row[idIndex]).trim())
+                })
+                break;
         }
     }
 }
