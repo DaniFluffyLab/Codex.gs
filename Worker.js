@@ -66,7 +66,7 @@ class CodexWorker {
 
 
         /**
-         * O nome do cabeçalho da coluna utilizada como chave primária (ID).
+         * O nome do cabeçalho da coluna utilizada como chave primária.
          * @type {string}
          * @private
          */
@@ -84,7 +84,7 @@ class CodexWorker {
         this._options = {
             mode: "minimal",
             columns: [],
-            ...options 
+            ...options
         };
 
 
@@ -107,7 +107,7 @@ class CodexWorker {
 
         /**
          * Mapa contendo os registros carregados da planilha.
-         * Associa cada identificador único (ID) ao seu respectivo objeto de dados de linha.
+         * Associa cada identificador único ao seu respectivo objeto de dados de linha.
          * @type {Map<string, Object>}
          * @private
          */
@@ -116,7 +116,7 @@ class CodexWorker {
 
         /**
          * Mapa que rastreia o status de sincronização das chaves alteradas na transação atual.
-         * Associa o ID do registro ao seu estado pendente para o próximo commit.
+         * Associa a key do registro ao seu estado pendente para o próximo commit.
          * @type {Map<string, ("new"|"modified"|"deleted")>}
          * @private
          */
@@ -214,7 +214,7 @@ class CodexWorker {
             let hasInvalid = this._options.columns.some(item => !columnIndexes.has(item));          // Verifica a validade das colunas
             if (hasInvalid) throw Error(`One or more requested columns do not exist.`);             // Lança erro se inválido 
             let filteredColumnIndexes = new Map()                                                   // Cria Map para colunas filtradas
-            filteredColumnIndexes.set(this._keyColumnName, columnIndexes.get(this._keyColumnName))  // Garante coluna de ID
+            filteredColumnIndexes.set(this._keyColumnName, columnIndexes.get(this._keyColumnName))  // Garante coluna de key
             for (let columnName of this._options.columns) {                                         // Para cada coluna requisitada:
                 filteredColumnIndexes.set(columnName, columnIndexes.get(columnName))                    // Armazena seu valor no Map de filtradas
             }
@@ -281,15 +281,26 @@ class CodexWorker {
         }
 
         // Executa a requisição
-        const APIresponse = Sheets.Spreadsheets.Values.batchGetByDataFilter(
-            {
-                dataFilters: [...requestedData.values()],
-                majorDimension: mode,
-                valueRenderOption: "UNFORMATTED_VALUE",
-                dateTimeRenderOption: "FORMATTED_STRING"
-            },
-            this._sheetID,
-        )
+        let APIresponse;
+        try {
+
+            // Requisita via API 
+            APIresponse = Sheets.Spreadsheets.Values.batchGetByDataFilter(
+                {
+                    dataFilters: [...requestedData.values()],
+                    majorDimension: mode,
+                    valueRenderOption: "UNFORMATTED_VALUE",
+                    dateTimeRenderOption: "FORMATTED_STRING"
+                },
+                this._sheetID,
+            )
+        } catch (e) {
+
+            // Checa se é um erro de request grande demais
+            if (e.message.includes("Response Code: 413. Message: response too large.")) mode = `${mode}-SAFETY`
+            else throw e    // Se não for, lança erro
+        }
+
 
         // Executa o pivoteamento dos dados
         switch (mode) {
@@ -305,48 +316,205 @@ class CodexWorker {
                     })
                 )
 
-                let idColumn = columnsData.get(columnIndexes.get(this._keyColumnName))  // Obtém a coluna de ID
+                let keyColumn = columnsData.get(columnIndexes.get(this._keyColumnName))  // Obtém a coluna de key
 
                 // Para cada linha recebida
-                idColumn.forEach((id, rowInd) => {
+                keyColumn.forEach((key, rowInd) => {
 
-                    if (id === undefined || id === null || String(id).trim() === "") return;    // Ignora linhas sem ID
+                    if (key === undefined || key === null || String(key).trim() === "") return; // Ignora linhas sem key
                     let obj = {}                                                                // Cria um objeto de saída
 
                     // Para cada coluna solicitada, cria a propriedade e armazena o valor no objeto
                     columnIndexes.forEach((colIndex, colName) => obj[colName] = columnsData.get(colIndex)[rowInd] ?? null)
 
                     // Armazena resutados
-                    this._data.set(String(id).trim(), obj)
-                    this._loadedkeys.add(String(id).trim())
-                    this._allkeys.add(String(id).trim())
+                    this._data.set(String(key).trim(), obj)
+                    this._loadedkeys.add(String(key).trim())
+                    this._allkeys.add(String(key).trim())
                 })
                 break;
 
-/*          
-            NAO TESTADO AINDA.
+            case "COLUMNS-SAFETY":
 
-            case "ROWS":
+                // Avisa o usuário sobre o uso do modo de segurança
+                console.warn(`${this._log} - Too much data, activating safety mode. Consider requesting fewer columns or using minimal mode with .search() to increase speed.`)
 
-                let rowsData = APIresponse.valueRanges.map(range => (range.valueRange.values && range.valueRange.values[0]) ? range.valueRange.values[0] : [])   // Prepara dados para leitura
-                let colOffset = Math.min(...columnIndexes.values())                                                             // Obtém o offset de colunas
-                let idIndex = columnIndexes.get(this._keyColumnName) - colOffset                                                // Obtém o índice do ID
+                /**
+                 * Obtém os valores de um intervalo da planilha utilizando a estrutura GridRange (0-indexed).
+                 * Esta função atua como um intermediário da API Avançada do Sheets, com fallback no método nativo
+                 * getRange do Apps Script. Retorna um array unidimensional (achatado).
+                 * * @param {GoogleAppsScript.Spreadsheet.Sheet} table - A instância da aba da planilha (Sheet).
+                 * * @param {Object} gridRange - Objeto contendo as coordenadas do intervalo.
+                 * @param {number} gridRange.startRowIndex - Índice inicial da linha (0-indexed, inclusive).
+                 * @param {number} gridRange.endRowIndex - Índice final da linha (0-indexed, exclusive).
+                 * @param {number} gridRange.startColumnIndex - Índice inicial da coluna (0-indexed, inclusive).
+                 * @param {number} gridRange.endColumnIndex - Índice final da coluna (0-indexed, exclusive).
+                 * * @returns {any[]} Um array unidimensional contendo todos os valores do intervalo solicitado.
+                 * @private
+                 */
+                function getValuesByGridRange(table, gridRange) {
+                    try {
 
-                // Para cada linha recebida
-                rowsData.forEach(row => {
+                        // Tenta requerer a API avançada
+                        Utilities.sleep(500)    // Força aguardar para evitar erro 429
+                        return Sheets.Spreadsheets.Values.batchGetByDataFilter(
+                            {
+                                dataFilters: [{ gridRange: gridRange }],
+                                majorDimension: "ROWS",
+                                valueRenderOption: "UNFORMATTED_VALUE",
+                                dateTimeRenderOption: "FORMATTED_STRING"
+                            },
+                            table.getSheetId(),
+                        ).valueRanges[0].valueRange.values
+                    }
+                    catch (e) {
 
-                    if (row[idIndex] === undefined || row[idIndex] === null || String(row[idIndex]).trim() === "") return;  // Ignora linhas sem ID
-                    let obj = {}                                                                                            // Cria um objeto de saída
+                        // Fallback via SpreadsheetApp
+                        return table.getRange(                                  // Obtém range
+                            gridRange.startRowIndex + 1,                            // Converte para 1-indexed
+                            gridRange.startColumnIndex + 1,                         // Converte para 1-indexed
+                            gridRange.endRowIndex - gridRange.startRowIndex,        // Calcula total de linhas
+                            gridRange.endColumnIndex - gridRange.startColumnIndex,  // Calcula total de colunas
+                        ).getValues()                                           // Obtém e achata array
+                    }
+                }
 
-                    // Para cada coluna solicitada, cria a propriedade e armazena o valor no objeto
-                    columnIndexes.forEach((colInd, colName) => obj[String(colName).trim()] = row[colInd - colOffset] ?? null)
+                /**
+                 * Agrupa colunas adjacentes (chunks) para reduzir o número de requisições à API.
+                 *
+                 * @param {Map<string, {gridRange: Object}>} gridRangesMap Mapa contendo os intervalos individuais de cada coluna.
+                 * @returns {Map<string[], {gridRange: Object}>} Mapa com os intervalos fundidos, onde a chave é a lista de nomes das colunas agrupadas.
+                 * @private
+                 */
+                function mergeGridRanges(gridRangesMap) {
 
-                    // Armazena resutados
-                    this._data.set(String(row[idIndex]).trim(), obj)
-                    this._loadedkeys.add(String(row[idIndex]).trim())
-                    this._allkeys.add(String(row[idIndex]).trim())
+                    const CHUNK_SIZE = 5    // Variável de tamanho máximo de chunk
+
+                    // Junta todas as gridRanges na array, com nome das colunas
+                    let allGridRanges = []
+                    gridRangesMap.forEach((data, colName) => {
+
+                        // Copia o objeto
+                        let safeData = { ...data };
+                        safeData.gridRange = { ...data.gridRange };
+
+                        // Insere o dado de colName e armazena
+                        safeData.gridRange.colName = colName;
+                        allGridRanges.push(safeData);
+
+                    })
+
+                    // Ordena os gridRanges
+                    let sortedGridRanges = allGridRanges.sort((a, b) => {
+                        return a.gridRange.startColumnIndex - b.gridRange.startColumnIndex
+                    })
+
+                    // Mesclando gridRanges
+                    let mergedGridRanges = new Map()
+                    let mergingGridRange = undefined
+                    let mergingColNames = undefined
+                    while (sortedGridRanges.length != 0) {
+
+                        // Obtém linha
+                        let workingGridRange = sortedGridRanges.shift().gridRange
+
+                        // Caso não haja um GridRange atualmente, criar e seguir para próx. loop
+                        if (mergingGridRange == undefined) {
+                            mergingGridRange = {
+                                sheetId: workingGridRange.sheetId,
+                                startRowIndex: workingGridRange.startRowIndex,
+                                endRowIndex: workingGridRange.endRowIndex,
+                                startColumnIndex: workingGridRange.startColumnIndex,
+                                endColumnIndex: workingGridRange.endColumnIndex,
+                            }
+                            mergingColNames = [workingGridRange.colName]
+                            continue;
+                        }
+
+                        // Mescla vizinhos
+                        let validMerge = (mergingGridRange.endColumnIndex == workingGridRange.startColumnIndex)
+                        if (validMerge) {
+                            mergingGridRange.endColumnIndex = workingGridRange.endColumnIndex
+                            mergingColNames.push(workingGridRange.colName);
+                        }
+
+                        // Caso tenha mesclado e atingido o tamanho ou caso não tenha sido mesclado
+                        if ((validMerge && mergingColNames.length == CHUNK_SIZE) || (!validMerge)) {
+                            mergedGridRanges.set(mergingColNames, { gridRange: mergingGridRange })
+                            mergingGridRange = undefined
+                            mergingColNames = undefined
+                        }
+
+                        // Caso não mesclado, guarda para nova iteração
+                        if (!validMerge) sortedGridRanges.unshift({ gridRange: workingGridRange })
+                    }
+
+                    // Caso tenha ficado algum objeto pra trás, armazena ele
+                    if (mergingGridRange != undefined) mergedGridRanges.set(mergingColNames, { gridRange: mergingGridRange })
+
+                    // Retorna objeto mesclado
+                    return mergedGridRanges
+                }
+
+
+
+
+                // Obtém dados de key
+                let keyData = getValuesByGridRange(this._table, requestedData.get(this._keyColumnName).gridRange).map(([v]) => String(v).trim())
+
+                // Registra IDs nos metadados de keys
+                for (let key of keyData) {
+                    if (key === undefined || key === null || key === "") continue;
+                    this._loadedkeys.add(key)
+                    this._allkeys.add(key)
+                    this._data.set(key, {})
+                    this._data.get(key)[this._keyColumnName] = key
+                }
+
+
+                requestedData.delete(this._keyColumnName)                   // Remove a requisição de coluna de key
+                let mergedRequestedData = mergeGridRanges(requestedData)    // Mescla as requisições
+
+                // Para cada conjunto de requisições
+                mergedRequestedData.forEach(({ gridRange }, colNames) => {
+
+                    let workingArray = getValuesByGridRange(this._table, gridRange)    // Obtém dados
+
+                    // Para cada linha
+                    workingArray.forEach((row, rowInd) => row.forEach((value, colInd) => {
+
+                        let currentKey = keyData[rowInd]                            // Obtém key atual
+                        if (!this._allkeys.has(currentKey)) return;                 // Se ID inválido, ignorar
+                        this._data.get(currentKey)[colNames[colInd]] = value;       // Armazena valor na memória
+                    }))
                 })
-                break; */
+                break;
+
+
+            /*          
+                        NAO TESTADO AINDA.
+            
+                        case "ROWS":
+            
+                            let rowsData = APIresponse.valueRanges.map(range => (range.valueRange.values && range.valueRange.values[0]) ? range.valueRange.values[0] : [])   // Prepara dados para leitura
+                            let colOffset = Math.min(...columnIndexes.values())                                                             // Obtém o offset de colunas
+                            let idIndex = columnIndexes.get(this._keyColumnName) - colOffset                                                // Obtém o índice do ID
+            
+                            // Para cada linha recebida
+                            rowsData.forEach(row => {
+            
+                                if (row[idIndex] === undefined || row[idIndex] === null || String(row[idIndex]).trim() === "") return;  // Ignora linhas sem ID
+                                let obj = {}                                                                                            // Cria um objeto de saída
+            
+                                // Para cada coluna solicitada, cria a propriedade e armazena o valor no objeto
+                                columnIndexes.forEach((colInd, colName) => obj[String(colName).trim()] = row[colInd - colOffset] ?? null)
+            
+                                // Armazena resutados
+                                this._data.set(String(row[idIndex]).trim(), obj)
+                                this._loadedkeys.add(String(row[idIndex]).trim())
+                                this._allkeys.add(String(row[idIndex]).trim())
+                            })
+                            break; */
         }
     }
 }
