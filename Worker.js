@@ -5,11 +5,11 @@
  * comandos de iniciar e encerrar uma transação.
  */
 
-class CodexWorker {
+class Codex {
 
 
     /**
-     * Creates a new CodexWorker instance to manage a Google Sheets tab as a persistent key-value store.
+     * Creates a new Codex instance to manage a Google Sheets tab as a persistent key-value store.
      * This class adapts the Google Sheets API to function similarly to a JavaScript `Map`,
      *
      * @param {string} sheetId - The unique identifier of the Google Spreadsheet (extractable from the URL).
@@ -26,18 +26,18 @@ class CodexWorker {
      * // Initialize connection to "Users" tab using "UserID" as key
      * 
      * // Not specifying "columns" will request all columns.
-     * const dbAllColumns = new CodexWorker("1BxiM...", "Users", "UserID", {
+     * const dbAllColumns = new Codex("1BxiM...", "Users", "UserID", {
      *     mode: "minimal"
      * });
      * 
      * // mode: "minimal" retrieves line data on demand.
-     * const dbOnDemand = new CodexWorker("1BxiM...", "Users", "UserID", {
+     * const dbOnDemand = new Codex("1BxiM...", "Users", "UserID", {
      *     mode: "minimal",
      *     columns: ["Price", "Stock"]
      * });
      * 
      * // mode: "full" retrieves all data from the rows at initialization.
-     * const dbAllData = new CodexWorker("1BxiM...", "Users", "UserID", {
+     * const dbAllData = new Codex("1BxiM...", "Users", "UserID", {
      *     mode: "full",
      *     columns: ["Stock", "Description"]
      * });
@@ -606,15 +606,37 @@ class CodexWorker {
     // MÉTODOS PÚBLICOS
 
     /**
-     * Removes all elements from the CodexWorker instance and schedules a full cleanup 
+     * Removes all elements from the Codex instance and schedules a full cleanup 
      * of the spreadsheet on the next commit.
      */
     clear() {
         this._wipeOnCommit = true;      // Marca planilha para exclusão
         this._keyStatus.clear();        // Limpa histórico de mudanças
-        this._data.clear();             // Limpa memória do script
+        this._data.clear();             // Limpa memória da instancia
         this._allkeys.clear();          // Limpa memória de todas as chaves
         this._loadedkeys.clear();       // Limpa memória de chaves carregadas
+    }
+
+    /**
+     * Removes the specified element from the Codex instance by key.
+     * Schedules the deletion of the corresponding row in the Google Sheets on the next commit.
+     * * @param {string} key The key of the element to remove.
+     * @returns {boolean} `true` if an element in the Codex object existed and has been removed, or `false` if the element does not exist.
+     */
+    delete(key) {
+
+        key = String(key).trim()                    // Formata key
+        let isDeleteable = this._allkeys.has(key)   // Verifica se há um dado a ser excluido
+
+        // Caso deletável
+        if (isDeleteable) {
+            this._data.delete(key)          // Remove da memória
+            this._allkeys.delete(key)       // Remove das keys existentes
+            this._setKeyAs(key, "deleted")  // Marca como deletado
+        }
+
+        // Retorna se dado está excluído
+        return isDeleteable
     }
 }
 
