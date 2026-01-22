@@ -567,11 +567,11 @@ class Codex {
                 }
 
 
-                requestedData.delete(this._keyColumnName)                   // Remove a requisição de coluna de key
-                let mergedRequestedData = SAFEMODE_mergeGridRanges(requestedData)    // Mescla as requisições
+                requestedData.delete(this._keyColumnName)                                       // Remove a requisição de coluna de key
+                let mergedRequestedColumns = SAFEMODE_mergeGridRanges(requestedData, "COLUMNS") // Mescla as requisições
 
                 // Para cada conjunto de requisições
-                mergedRequestedData.forEach(({ gridRange }, colNames) => {
+                mergedRequestedColumns.forEach(({ gridRange }, colNames) => {
 
                     let workingArray = SAFEMODE_getValuesByGridRange(this._table, gridRange)    // Obtém dados
 
@@ -591,12 +591,12 @@ class Codex {
                 let rowsData = APIresponse.valueRanges.map(range => (range.valueRange.values && range.valueRange.values[0]) ? range.valueRange.values[0] : [])
 
                 let colOffset = Math.min(...columnIndexes.values())                     // Obtém o offset de colunas
-                let keyIndex = columnIndexes.get(this._keyColumnName) - colOffset       // Obtém o índice do ID
+                let keyIndex = columnIndexes.get(this._keyColumnName) - colOffset       // Obtém o índice das keys
 
                 // Para cada linha recebida
                 rowsData.forEach(row => {
 
-                    if (row[keyIndex] === undefined || row[keyIndex] === null || String(row[keyIndex]).trim() === "") return;   // Ignora linhas sem ID
+                    if (row[keyIndex] === undefined || row[keyIndex] === null || String(row[keyIndex]).trim() === "") return;   // Ignora linhas sem keys
                     let obj = {}                                                                                                // Cria um objeto de saída
 
                     // Para cada coluna solicitada, cria a propriedade e armazena o valor no objeto
@@ -614,7 +614,30 @@ class Codex {
                 // Avisa o usuário sobre o uso do modo de segurança
                 console.warn(`${this._log} - Too much data, activating safety mode. Consider requesting fewer rows or using minimal mode with .search() to increase speed.`)
 
-                
+                let mergedRequestedRows = SAFEMODE_mergeGridRanges(requestedData, "ROWS")       // Mescla as requisições
+                let safe_colOffset = Math.min(...columnIndexes.values())                        // Obtém o offset de colunas
+                let safe_keyIndex = columnIndexes.get(this._keyColumnName) - safe_colOffset     // Obtém o índice das keys
+
+                // Para cada conjunto de requisições
+                mergedRequestedRows.forEach(({ gridRange }) => {
+
+                    let workingArray = SAFEMODE_getValuesByGridRange(this._table, gridRange)    // Obtém dados
+                    workingArray.forEach((row) => {                                             // Para cada linha
+
+                        let currentKey = String(row[safe_keyIndex]).trim()                                  // Obtém key atual
+                        if (currentKey === undefined || currentKey === null || currentKey === "") return;   // Ignora linhas sem keys
+                        let obj = {}                                                                        // Cria objeto de saída
+
+                        // Para cada coluna solicitada, cria a propriedade e armazena o valor no objeto
+                        columnIndexes.forEach((colInd, colName) => obj[String(colName).trim()] = row[colInd - safe_colOffset] ?? null)
+
+                        // Armazena resutados
+                        this._data.set(String(row[safe_keyIndex]).trim(), obj)
+                        this._loadedkeys.add(String(row[safe_keyIndex]).trim())
+                        this._allkeys.add(String(row[safe_keyIndex]).trim())
+                    })
+                })
+                break;
         }
     }
 
