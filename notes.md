@@ -86,20 +86,6 @@ Objetos como `Date` são alterados por métodos (ex: `.setFullYear()`) e não po
      */
     set(key, value) { }
 
-    /** 
-     * Removes the entry specified by the key from this data.
-     * 
-     * @param {string} key The key of the entry to remove from the data. 
-     * 
-     * @returns {bool} "true" if an entry in the data has been removed succesfully.
-     * "false" if the key is not found in the data.
-     */
-    delete(key) { }
-
-    /** 
-     * Removes all values from data.
-     */
-    clear() { }
 
     /**
      * Returns a new Iterator object that contains the keys for each element in the 

@@ -47,7 +47,7 @@ class Codex {
 
         // FASE 0 - VALIDAÇÃO DE DEPENDÊNCIAS E DEFINIÇÃO DE VARS GLOBAIS
 
-        
+
         /**
          * Prefixo identificador utilizado em mensagens de log e erros da instância.
          * @type {string}
@@ -182,49 +182,16 @@ class Codex {
 
 
         // Obtém dados baseados no modo de operação
-
         switch (this._options.mode) {
 
             case "minimal":
 
-                let keys_colIdx;                                                                    // Cria var para guardar índice
-                try { keys_colIdx = columnIndexes.get(this._keyColumnName) }                        // Procura pelo nome
-                catch (e) { throw Error(`${this._log} - Error locating keyColumn: ${e.stack}`) }    // Retorna outros erros
-                if (keys_colIdx == undefined) throw Error(`${this._log} - keyColumn not found`)     // Se não achar coluna, lança erro
-
                 try {
-                    let lastRow = this._table.getLastRow()      // Obtém última linha
-                    if (lastRow >= 2) {                         // Se planilha não está vazia
-
-                        // Efetua request na API
-                        let keys_rawValues = Sheets.Spreadsheets.Values.batchGetByDataFilter(
-                            {
-                                dataFilters: [{
-                                    gridRange: {
-                                        sheetId: this._tableID,
-                                        startRowIndex: 1,
-                                        startColumnIndex: keys_colIdx,
-                                        endRowIndex: lastRow,
-                                        endColumnIndex: keys_colIdx + 1
-                                    }
-                                }],
-                                majorDimension: "COLUMNS",
-                                valueRenderOption: "UNFORMATTED_VALUE",
-                                dateTimeRenderOption: "FORMATTED_STRING"
-                            },
-                            this._sheetID,
-                        ).valueRanges[0].valueRange.values[0]
-
-
-                        for (let k of keys_rawValues) {                             // Para cada key
-                            if (k == "" || k == null || k == undefined) continue    // Ignora keys vazias
-                            this._allkeys.add(String(k).trim())                     // Adiciona Key ao Set mestre
-                        }
-                    }
-                }
-                catch (e) { throw Error(`${this._log} - Error to get keys: ${e.stack}`) }  // Retorna outros erros
+                    let keys = this._getRowIndexesByKey(true, columnIndexes)    // Obtém keys
+                    this._allkeys = new Set([...keys.keys()])                   // Adiciona keys ao Set mestre
+                }                                 // Requisita dados
+                catch (e) { throw Error(`${this._log} - Error to get values: ${e.stack}`) }     // Retorna erros
                 break;
-
 
             case "full":
 
@@ -232,9 +199,6 @@ class Codex {
                 catch (e) { throw Error(`${this._log} - Error to get values: ${e.stack}`) }     // Retorna erros
                 break;
         }
-
-
-
     }
 
     /**
@@ -249,7 +213,6 @@ class Codex {
 
         let columnIndexes;                                              // Cria var para índices das colunas
         let lastColumn = this._table.getLastColumn()                    // Obtém última coluna
-        if (lastColumn == 0) throw Error(`No columns found`)            // Lança erro se sem colunas
         let columnArray = this._table.getRange(1, 1, 1, lastColumn)     // Seleciona cabeçalho
             .getValues()[0]                                             // Obtém dados
         columnIndexes = new Map(columnArray.map((v, i) => [v, i]))      // Insere dados dos índices no Map
@@ -269,6 +232,82 @@ class Codex {
         // Retorna array de índices
         return columnIndexes
     }
+
+    /**
+     * Localiza os índices das linhas para chaves específicas ou para todas as chaves da planilha.
+     * * @param {string|string[]|boolean} requestedKeys - As chaves a serem localizadas. 
+     * Aceita uma string única, um array de strings ou `true` para mapear todas as chaves existentes.
+     * @param {Map<string, number>} [columnIndexes] - Mapa opcional de cabeçalhos e índices. 
+     * Se omitido, utiliza o mapeamento padrão da instância.
+     * * @returns {Map<string, number>} Um Map onde a chave é o ID (string) e o valor é o índice da linha 0-based (number).
+     * @private
+     */
+    _getRowIndexesByKey(requestedKeys, columnIndexes) {
+
+        let rowIndexes = new Map();                     // Map para guardar índices
+        let lastRow = this._table.getLastRow();         // Obtém última linha
+        let keys_colIdx;                                // Var para guardar indice da coluna de keys
+        let mode;
+
+        // Valida parâmetros
+        columnIndexes = columnIndexes === undefined ? this._getColumnIndexes() : columnIndexes
+        mode = typeof requestedKeys === 'string' ? "SINGLE" : mode
+        mode = Array.isArray(requestedKeys) ? "MULTI" : mode
+        mode = requestedKeys == true ? "FULL" : mode
+        requestedKeys = Array.isArray(requestedKeys) ? new Set([...requestedKeys]) : requestedKeys
+
+        if (mode === undefined) throw Error(`Invalid requestedKeys.`)
+
+        // Procura coluna de índices
+        try { keys_colIdx = columnIndexes.get(this._keyColumnName) }                        // Procura pelo nome
+        catch (e) { throw Error(`Error locating keyColumn: ${e.stack}`) }    // Retorna outros erros
+        if (keys_colIdx == undefined) throw Error(`keyColumn not found`)     // Se não achar coluna, lança erro
+
+        try {
+
+            // Modo rápido
+            if (mode == "SINGLE") {
+                let index = this._table.getRange(2, keys_colIdx + 1, lastRow)   // Obtém range de keys
+                    .createTextFinder(requestedKeys).matchEntireCell(true)      // Pesquisa na planilha
+                    .findPrevious().getRow() - 1                                // Obtém índice da última instância
+                rowIndexes.set(requestedKeys, index)                            // Adiciona indice no Map
+                return rowIndexes                                               // Encerra execução
+            }
+
+            if (lastRow >= 2) { // Se planilha não está vazia
+
+                // Efetua request na API
+                let keys_rawValues = Sheets.Spreadsheets.Values.batchGetByDataFilter(
+                    {
+                        dataFilters: [{
+                            gridRange: {
+                                sheetId: this._tableID,
+                                startRowIndex: 1,
+                                startColumnIndex: keys_colIdx,
+                                endRowIndex: lastRow,
+                                endColumnIndex: keys_colIdx + 1
+                            }
+                        }],
+                        majorDimension: "COLUMNS",
+                        valueRenderOption: "UNFORMATTED_VALUE",
+                        dateTimeRenderOption: "FORMATTED_STRING"
+                    },
+                    this._sheetID,
+                ).valueRanges[0].valueRange.values[0]
+
+                keys_rawValues.forEach((k, i) => {                                                  // Para cada key
+                    let trimKey = String(k).trim()                                                      // Limpa key
+                    if (k == "" || k == null || k == undefined) return;                                 // Ignora keys vazias
+                    if (mode === "FULL" || requestedKeys.has(trimKey)) rowIndexes.set(trimKey, i + 1)   // Armazena keys com índice
+                })
+
+                // Encerra execução
+                return rowIndexes
+            }
+        } catch (e) { throw Error(`Error to get keys: ${e.stack}`) }  // Retorna outros erros
+    }
+
+
 
     /**
      * Requisita novos dados da planilha via API avançada e realiza o pivoteamento para o cache interno.
