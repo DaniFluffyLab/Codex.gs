@@ -1,4 +1,4 @@
-/** 
+/* 
  * Este projeto busca intermediar as comunicações entre o JS e o Google Sheets
  * para otimizar a leitura e escrita do Sheets como uma database. O objetivo é
  * utilizar ua sintaxe análoga ao do processamento dos Maps do JS, mas com 
@@ -7,6 +7,41 @@
 
 class CodexWorker {
 
+
+    /**
+     * Creates a new CodexWorker instance to manage a Google Sheets tab as a persistent key-value store.
+     * This class adapts the Google Sheets API to function similarly to a JavaScript `Map`,
+     *
+     * @param {string} sheetId - The unique identifier of the Google Spreadsheet (extractable from the URL).
+     * @param {string} tableName - The exact name of the tab (Sheet) to be managed.
+     * @param {string} keyColumnName - The header name of the column that serves as the unique Primary Key (ID).
+     * @param {Object} options - Configuration options for initialization.
+     * @param {("full"|"minimal")} options.mode - Defines whether the spreadsheet should be pre-loaded into memory or requested on demand.
+     * @param {string[]} [options.columns] - Array of specific column names to be eager-loaded during instantiation.
+     *
+     * @throws {Error} If the "Google Sheets API" Advanced Service is not enabled with the identifier "Sheets".
+     * @throws {Error} If the spreadsheet or the specified tab cannot be accessed.
+     *
+     * @example
+     * // Initialize connection to "Users" tab using "UserID" as key
+     * 
+     * // Not specifying "columns" will request all columns.
+     * const dbAllColumns = new CodexWorker("1BxiM...", "Users", "UserID", {
+     *     mode: "minimal"
+     * });
+     * 
+     * // mode: "minimal" retrieves line data on demand.
+     * const dbOnDemand = new CodexWorker("1BxiM...", "Users", "UserID", {
+     *     mode: "minimal",
+     *     columns: ["Price", "Stock"]
+     * });
+     * 
+     * // mode: "full" retrieves all data from the rows at initialization.
+     * const dbAllData = new CodexWorker("1BxiM...", "Users", "UserID", {
+     *     mode: "full",
+     *     columns: ["Stock", "Description"]
+     * });
+     */
     constructor(sheetId, tableName, keyColumnName, options) {
 
 
