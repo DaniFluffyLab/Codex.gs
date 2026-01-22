@@ -47,6 +47,15 @@ class Codex {
 
         // FASE 0 - VALIDAÇÃO DE DEPENDÊNCIAS E DEFINIÇÃO DE VARS GLOBAIS
 
+        
+        /**
+         * Prefixo identificador utilizado em mensagens de log e erros da instância.
+         * @type {string}
+         * @private
+         */
+        this._log = `[Codex] SheetID:"${sheetId}"; Table: "${tableName}"`;
+
+
         if (typeof Sheets === 'undefined') {
             throw new Error(
                 `[Codex] The "Google Sheets API" Advanced API is not enabled. ` +
@@ -157,6 +166,7 @@ class Codex {
          */
         this._keyStatus = new Map();
 
+
         /**
          * Marca se a planilha deve ser toda zerada.
          * @type {boolean}
@@ -164,13 +174,6 @@ class Codex {
          */
         this._wipeOnCommit = false;
 
-
-        /**
-         * Prefixo identificador utilizado em mensagens de log e erros da instância.
-         * @type {string}
-         * @private
-         */
-        this._log = `[Codex] SheetID:"${this._sheetID}"; Table: "${this._tableName}"`;
 
 
         // Carrega dados de índices de colunas
