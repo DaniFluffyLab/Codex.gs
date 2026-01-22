@@ -321,6 +321,137 @@ class Codex {
      */
     _fetchNewData(requestedRows, columnIndexes) {
 
+        // HELPERS
+
+        /**
+         * Obtém os valores de um intervalo da planilha utilizando a estrutura GridRange (0-indexed).
+         * Esta função atua como um intermediário da API Avançada do Sheets, com fallback no método nativo
+         * getRange do Apps Script. Retorna um array similar ao Range.getValues().
+         * * @param {GoogleAppsScript.Spreadsheet.Sheet} table - A instância da aba da planilha (Sheet).
+         * * @param {Object} gridRange - Objeto contendo as coordenadas do intervalo.
+         * @param {number} gridRange.startRowIndex - Índice inicial da linha (0-indexed, inclusive).
+         * @param {number} gridRange.endRowIndex - Índice final da linha (0-indexed, exclusive).
+         * @param {number} gridRange.startColumnIndex - Índice inicial da coluna (0-indexed, inclusive).
+         * @param {number} gridRange.endColumnIndex - Índice final da coluna (0-indexed, exclusive).
+         * * @returns {any[[]]} Um array contendo todos os valores do intervalo solicitado.
+         * @private
+         */
+        function SAFEMODE_getValuesByGridRange(table, gridRange) {
+            try {
+
+                // Tenta requerer a API avançada
+                Utilities.sleep(500)    // Força aguardar para evitar erro 429
+                return Sheets.Spreadsheets.Values.batchGetByDataFilter(
+                    {
+                        dataFilters: [{ gridRange: gridRange }],
+                        majorDimension: "ROWS",
+                        valueRenderOption: "UNFORMATTED_VALUE",
+                        dateTimeRenderOption: "FORMATTED_STRING"
+                    },
+                    table.getSheetId(),
+                ).valueRanges[0].valueRange.values
+            }
+            catch (e) {
+
+                // Fallback via SpreadsheetApp
+                return table.getRange(                                  // Obtém range
+                    gridRange.startRowIndex + 1,                            // Converte para 1-indexed
+                    gridRange.startColumnIndex + 1,                         // Converte para 1-indexed
+                    gridRange.endRowIndex - gridRange.startRowIndex,        // Calcula total de linhas
+                    gridRange.endColumnIndex - gridRange.startColumnIndex,  // Calcula total de colunas
+                ).getValues()                                           // Obtém e achata array
+            }
+        }
+
+        /**
+         * Agrupa dimensões adjacentes (chunks) para reduzir o número de requisições à API.
+         *
+         * @param {Map<string, {gridRange: Object}>} gridRangesMap Mapa contendo os intervalos individuais de cada dimensão.
+         * @param {"ROWS"|"COLUMNS"} dimension Define a orientação da mesclagem
+         * @returns {Map<string[], {gridRange: Object}>} Mapa com os intervalos fundidos, onde a chave é a lista de nomes das colunas agrupadas.
+         * @private
+         */
+        function SAFEMODE_mergeGridRanges(gridRangesMap, dimension) {
+
+            // Variável de tamanho máximo de chunk
+            const CHUNK_SIZE = dimension.includes("ROWS") ? 5 : 10
+
+            // Define o nome das propriedades para cada dimensão
+            let startDimensionIndex = dimension.includes("ROWS") ? "startRowIndex" : "startColumnIndex"
+            let endDimensionIndex = dimension.includes("ROWS") ? "endRowIndex" : "endColumnIndex"
+
+
+            // Junta todas as gridRanges na array, mantendo as keys
+            let allGridRanges = []
+            gridRangesMap.forEach((data, key) => {
+
+                // Copia o objeto
+                let safeData = { ...data };
+                safeData.gridRange = { ...data.gridRange };
+
+                // Insere o dado de key e armazena
+                safeData.gridRange.key = key;
+                allGridRanges.push(safeData);
+
+            })
+
+            // Ordena os gridRanges
+            let sortedGridRanges = allGridRanges.sort((a, b) => {
+                return a.gridRange[startDimensionIndex] - b.gridRange[startDimensionIndex]
+            })
+
+            // Mesclando gridRanges
+            let mergedGridRanges = new Map()
+            let mergingGridRange = undefined
+            let mergingKeys = undefined
+            while (sortedGridRanges.length != 0) {
+
+                // Obtém linha
+                let workingGridRange = sortedGridRanges.shift().gridRange
+
+                // Caso não haja um GridRange atualmente, criar e seguir para próx. loop
+                if (mergingGridRange == undefined) {
+                    mergingGridRange = {
+                        sheetId: workingGridRange.sheetId,
+                        startRowIndex: workingGridRange.startRowIndex,
+                        endRowIndex: workingGridRange.endRowIndex,
+                        startColumnIndex: workingGridRange.startColumnIndex,
+                        endColumnIndex: workingGridRange.endColumnIndex,
+                    }
+                    mergingKeys = [workingGridRange.key]
+                    continue;
+                }
+
+                // Mescla vizinhos
+                let validMerge = (mergingGridRange[endDimensionIndex] == workingGridRange[startDimensionIndex])
+                if (validMerge) {
+                    mergingGridRange[endDimensionIndex] = workingGridRange[endDimensionIndex]
+                    mergingKeys.push(workingGridRange.key);
+                }
+
+                // Caso tenha mesclado e atingido o tamanho ou caso não tenha sido mesclado
+                if ((validMerge && mergingKeys.length == CHUNK_SIZE) || (!validMerge)) {
+                    mergedGridRanges.set(mergingKeys, { gridRange: mergingGridRange })
+                    mergingGridRange = undefined
+                    mergingKeys = undefined
+                }
+
+                // Caso não mesclado, guarda para nova iteração
+                if (!validMerge) sortedGridRanges.unshift({ gridRange: workingGridRange })
+            }
+
+            // Caso tenha ficado algum objeto pra trás, armazena ele
+            if (mergingGridRange != undefined) mergedGridRanges.set(mergingKeys, { gridRange: mergingGridRange })
+
+            // Retorna objeto mesclado
+            return mergedGridRanges
+        }
+
+
+
+
+
+
         // Valida parâmetros
         if (!Array.isArray(requestedRows) && requestedRows != true) throw Error(`Invalid requestedRows.`)
 
@@ -353,8 +484,8 @@ class Codex {
                     requestedData.set(rowIndex, {
                         gridRange: {
                             sheetId: this._tableID,
-                            startRowIndex: rowIndex - 1,
-                            endRowIndex: rowIndex,
+                            startRowIndex: rowIndex,
+                            endRowIndex: rowIndex + 1,
                             startColumnIndex: firstCol,
                             endColumnIndex: lastCol + 1
                         }
@@ -423,128 +554,8 @@ class Codex {
                 // Avisa o usuário sobre o uso do modo de segurança
                 console.warn(`${this._log} - Too much data, activating safety mode. Consider requesting fewer columns or using minimal mode with .search() to increase speed.`)
 
-                /**
-                 * Obtém os valores de um intervalo da planilha utilizando a estrutura GridRange (0-indexed).
-                 * Esta função atua como um intermediário da API Avançada do Sheets, com fallback no método nativo
-                 * getRange do Apps Script. Retorna um array unidimensional (achatado).
-                 * * @param {GoogleAppsScript.Spreadsheet.Sheet} table - A instância da aba da planilha (Sheet).
-                 * * @param {Object} gridRange - Objeto contendo as coordenadas do intervalo.
-                 * @param {number} gridRange.startRowIndex - Índice inicial da linha (0-indexed, inclusive).
-                 * @param {number} gridRange.endRowIndex - Índice final da linha (0-indexed, exclusive).
-                 * @param {number} gridRange.startColumnIndex - Índice inicial da coluna (0-indexed, inclusive).
-                 * @param {number} gridRange.endColumnIndex - Índice final da coluna (0-indexed, exclusive).
-                 * * @returns {any[]} Um array unidimensional contendo todos os valores do intervalo solicitado.
-                 * @private
-                 */
-                function getValuesByGridRange(table, gridRange) {
-                    try {
-
-                        // Tenta requerer a API avançada
-                        Utilities.sleep(500)    // Força aguardar para evitar erro 429
-                        return Sheets.Spreadsheets.Values.batchGetByDataFilter(
-                            {
-                                dataFilters: [{ gridRange: gridRange }],
-                                majorDimension: "ROWS",
-                                valueRenderOption: "UNFORMATTED_VALUE",
-                                dateTimeRenderOption: "FORMATTED_STRING"
-                            },
-                            table.getSheetId(),
-                        ).valueRanges[0].valueRange.values
-                    }
-                    catch (e) {
-
-                        // Fallback via SpreadsheetApp
-                        return table.getRange(                                  // Obtém range
-                            gridRange.startRowIndex + 1,                            // Converte para 1-indexed
-                            gridRange.startColumnIndex + 1,                         // Converte para 1-indexed
-                            gridRange.endRowIndex - gridRange.startRowIndex,        // Calcula total de linhas
-                            gridRange.endColumnIndex - gridRange.startColumnIndex,  // Calcula total de colunas
-                        ).getValues()                                           // Obtém e achata array
-                    }
-                }
-
-                /**
-                 * Agrupa colunas adjacentes (chunks) para reduzir o número de requisições à API.
-                 *
-                 * @param {Map<string, {gridRange: Object}>} gridRangesMap Mapa contendo os intervalos individuais de cada coluna.
-                 * @returns {Map<string[], {gridRange: Object}>} Mapa com os intervalos fundidos, onde a chave é a lista de nomes das colunas agrupadas.
-                 * @private
-                 */
-                function mergeGridRanges(gridRangesMap) {
-
-                    const CHUNK_SIZE = 5    // Variável de tamanho máximo de chunk
-
-                    // Junta todas as gridRanges na array, com nome das colunas
-                    let allGridRanges = []
-                    gridRangesMap.forEach((data, colName) => {
-
-                        // Copia o objeto
-                        let safeData = { ...data };
-                        safeData.gridRange = { ...data.gridRange };
-
-                        // Insere o dado de colName e armazena
-                        safeData.gridRange.colName = colName;
-                        allGridRanges.push(safeData);
-
-                    })
-
-                    // Ordena os gridRanges
-                    let sortedGridRanges = allGridRanges.sort((a, b) => {
-                        return a.gridRange.startColumnIndex - b.gridRange.startColumnIndex
-                    })
-
-                    // Mesclando gridRanges
-                    let mergedGridRanges = new Map()
-                    let mergingGridRange = undefined
-                    let mergingColNames = undefined
-                    while (sortedGridRanges.length != 0) {
-
-                        // Obtém linha
-                        let workingGridRange = sortedGridRanges.shift().gridRange
-
-                        // Caso não haja um GridRange atualmente, criar e seguir para próx. loop
-                        if (mergingGridRange == undefined) {
-                            mergingGridRange = {
-                                sheetId: workingGridRange.sheetId,
-                                startRowIndex: workingGridRange.startRowIndex,
-                                endRowIndex: workingGridRange.endRowIndex,
-                                startColumnIndex: workingGridRange.startColumnIndex,
-                                endColumnIndex: workingGridRange.endColumnIndex,
-                            }
-                            mergingColNames = [workingGridRange.colName]
-                            continue;
-                        }
-
-                        // Mescla vizinhos
-                        let validMerge = (mergingGridRange.endColumnIndex == workingGridRange.startColumnIndex)
-                        if (validMerge) {
-                            mergingGridRange.endColumnIndex = workingGridRange.endColumnIndex
-                            mergingColNames.push(workingGridRange.colName);
-                        }
-
-                        // Caso tenha mesclado e atingido o tamanho ou caso não tenha sido mesclado
-                        if ((validMerge && mergingColNames.length == CHUNK_SIZE) || (!validMerge)) {
-                            mergedGridRanges.set(mergingColNames, { gridRange: mergingGridRange })
-                            mergingGridRange = undefined
-                            mergingColNames = undefined
-                        }
-
-                        // Caso não mesclado, guarda para nova iteração
-                        if (!validMerge) sortedGridRanges.unshift({ gridRange: workingGridRange })
-                    }
-
-                    // Caso tenha ficado algum objeto pra trás, armazena ele
-                    if (mergingGridRange != undefined) mergedGridRanges.set(mergingColNames, { gridRange: mergingGridRange })
-
-                    // Retorna objeto mesclado
-                    return mergedGridRanges
-                }
-
-
-
-
                 // Obtém dados de key
-                let keyData = getValuesByGridRange(this._table, requestedData.get(this._keyColumnName).gridRange).map(([v]) => String(v).trim())
+                let keyData = SAFEMODE_getValuesByGridRange(this._table, requestedData.get(this._keyColumnName).gridRange).map(([v]) => String(v).trim())
 
                 // Registra IDs nos metadados de keys
                 for (let key of keyData) {
@@ -557,12 +568,12 @@ class Codex {
 
 
                 requestedData.delete(this._keyColumnName)                   // Remove a requisição de coluna de key
-                let mergedRequestedData = mergeGridRanges(requestedData)    // Mescla as requisições
+                let mergedRequestedData = SAFEMODE_mergeGridRanges(requestedData)    // Mescla as requisições
 
                 // Para cada conjunto de requisições
                 mergedRequestedData.forEach(({ gridRange }, colNames) => {
 
-                    let workingArray = getValuesByGridRange(this._table, gridRange)    // Obtém dados
+                    let workingArray = SAFEMODE_getValuesByGridRange(this._table, gridRange)    // Obtém dados
 
                     // Para cada linha
                     workingArray.forEach((row, rowInd) => row.forEach((value, colInd) => {
@@ -574,31 +585,36 @@ class Codex {
                 })
                 break;
 
+            case "ROWS":
 
-            /*          
-                        NAO TESTADO AINDA.
-            
-                        case "ROWS":
-            
-                            let rowsData = APIresponse.valueRanges.map(range => (range.valueRange.values && range.valueRange.values[0]) ? range.valueRange.values[0] : [])   // Prepara dados para leitura
-                            let colOffset = Math.min(...columnIndexes.values())                                                             // Obtém o offset de colunas
-                            let idIndex = columnIndexes.get(this._keyColumnName) - colOffset                                                // Obtém o índice do ID
-            
-                            // Para cada linha recebida
-                            rowsData.forEach(row => {
-            
-                                if (row[idIndex] === undefined || row[idIndex] === null || String(row[idIndex]).trim() === "") return;  // Ignora linhas sem ID
-                                let obj = {}                                                                                            // Cria um objeto de saída
-            
-                                // Para cada coluna solicitada, cria a propriedade e armazena o valor no objeto
-                                columnIndexes.forEach((colInd, colName) => obj[String(colName).trim()] = row[colInd - colOffset] ?? null)
-            
-                                // Armazena resutados
-                                this._data.set(String(row[idIndex]).trim(), obj)
-                                this._loadedkeys.add(String(row[idIndex]).trim())
-                                this._allkeys.add(String(row[idIndex]).trim())
-                            })
-                            break; */
+                // Prepara dados para leitura
+                let rowsData = APIresponse.valueRanges.map(range => (range.valueRange.values && range.valueRange.values[0]) ? range.valueRange.values[0] : [])
+
+                let colOffset = Math.min(...columnIndexes.values())                     // Obtém o offset de colunas
+                let keyIndex = columnIndexes.get(this._keyColumnName) - colOffset       // Obtém o índice do ID
+
+                // Para cada linha recebida
+                rowsData.forEach(row => {
+
+                    if (row[keyIndex] === undefined || row[keyIndex] === null || String(row[keyIndex]).trim() === "") return;   // Ignora linhas sem ID
+                    let obj = {}                                                                                                // Cria um objeto de saída
+
+                    // Para cada coluna solicitada, cria a propriedade e armazena o valor no objeto
+                    columnIndexes.forEach((colInd, colName) => obj[String(colName).trim()] = row[colInd - colOffset] ?? null)
+
+                    // Armazena resutados
+                    this._data.set(String(row[keyIndex]).trim(), obj)
+                    this._loadedkeys.add(String(row[keyIndex]).trim())
+                    this._allkeys.add(String(row[keyIndex]).trim())
+                })
+                break;
+
+            case "ROWS-SAFETY":
+
+                // Avisa o usuário sobre o uso do modo de segurança
+                console.warn(`${this._log} - Too much data, activating safety mode. Consider requesting fewer rows or using minimal mode with .search() to increase speed.`)
+
+                
         }
     }
 
@@ -680,6 +696,22 @@ class Codex {
         // Retorna se dado está excluído
         return isDeleteable
     }
+
+
+
+    /*     get(key) {
+    
+            key = String(key).trim()                // Formata key
+            requestedData = this._data.get(key)     // Obtém o dado requisitado
+    
+            // Retorna vazio caso planilha zerada e dado não estar na memória
+            if (this._wipeOnCommit && requestedData === undefined) return undefined
+    
+    
+    
+        } */
+
+
 }
 
 
