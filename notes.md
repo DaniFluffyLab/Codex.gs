@@ -113,45 +113,7 @@ Objetos como `Date` são alterados por métodos (ex: `.setFullYear()`) e não po
 
 
 
-    /**
-    * Define a new status for the key.
-    * @param {string} key The key of the entry to update status.
-    * @param {string} newState The status of the key: "new", "modified", "deleted".
-    * @private
-    */
-    _markAs(key, newState) {
 
-        // Verifica se o estado solicitado é válido
-        const validStates = ["new", "modified", "deleted"];
-        if (!validStates.includes(newState)) throw Error("Not a valid state.")
-
-        // Obtém estado atual da chave
-        let actualState = this._keyStatus.get(key)
-
-        // Caso não possua estado definido, adicionar
-        if (actualState == undefined) {
-            this._keyStatus.set(key, newState)
-            return undefined
-        }
-
-        // Age conforme o estado atual
-        switch (actualState) {
-
-            case "new":
-                if (newState == "deleted") this._keyStatus.delete(key);
-                // if (newState == "modified") deve manter o estado como "new" 
-                break;
-
-            case "modified":
-                // if (newState == "add") não é uma operação válida
-                if (newState == "deleted") this._keyStatus.set(key, "deleted");
-                break;
-            case "deleted":
-                // Adicionar uma chave deletada a reativa modificando o valor.
-                if (newState == "new") this._keyStatus.set(key, "modified");
-            // if (newState == "modified") não reabilita a chave. 
-        }
-    }
 
 
 ```

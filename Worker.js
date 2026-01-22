@@ -157,6 +157,13 @@ class CodexWorker {
          */
         this._keyStatus = new Map();
 
+        /**
+         * Marca se a planilha deve ser toda zerada.
+         * @type {boolean}
+         * @private
+         */
+        this._wipeOnCommit = false;
+
 
         /**
          * Prefixo identificador utilizado em mensagens de log e erros da instância.
@@ -551,6 +558,63 @@ class CodexWorker {
                             })
                             break; */
         }
+    }
+
+    /**
+    * Define a new status for the key.
+    * @param {string} key The key of the entry to update status.
+    * @param {"new"|"modified"|"deleted"} newState The status of the key.
+    * @private
+    */
+    _setKeyAs(key, newState) {
+
+        // Obtém estado atual da chave
+        let actualState = this._keyStatus.get(key)
+
+        // Caso não possua estado definido, adiciona estado e encerra
+        if (actualState === undefined) {
+            this._keyStatus.set(key, newState)
+            return undefined
+        }
+
+        // Caso estado anterior seja igual ao novo, encerra
+        if (actualState === newState) return;
+
+        // Age conforme o estado atual
+        switch (actualState) {
+
+            case "new":
+                if (newState == "deleted") this._keyStatus.delete(key);
+                // if (newState == "modified") deve manter o estado como "new" 
+                break;
+
+            case "modified":
+                // if (newState == "new") não é uma operação válida
+                if (newState == "deleted") this._keyStatus.set(key, "deleted");
+                break;
+            case "deleted":
+                // Adicionar uma chave deletada a reativa modificando o valor.
+                if (newState == "new") this._keyStatus.set(key, "modified");
+            // if (newState == "modified") não reabilita a chave. 
+        }
+    }
+
+
+
+
+
+    // MÉTODOS PÚBLICOS
+
+    /**
+     * Removes all elements from the CodexWorker instance and schedules a full cleanup 
+     * of the spreadsheet on the next commit.
+     */
+    clear() {
+        this._wipeOnCommit = true;      // Marca planilha para exclusão
+        this._keyStatus.clear();        // Limpa histórico de mudanças
+        this._data.clear();             // Limpa memória do script
+        this._allkeys.clear();          // Limpa memória de todas as chaves
+        this._loadedkeys.clear();       // Limpa memória de chaves carregadas
     }
 }
 
