@@ -53,12 +53,12 @@ class Codex {
          * @type {string}
          * @private
          */
-        this._log = `[Codex] SheetID:"${sheetId}"; Table: "${tableName}"`;
+        this._log = `[ CODEX | SheetID:"${sheetId}" | Table: "${tableName}" ]\n`;
 
 
         if (typeof Sheets === 'undefined') {
             throw new Error(
-                `[Codex] The "Google Sheets API" Advanced API is not enabled. ` +
+                `[CODEX] The "Google Sheets API" Advanced API is not enabled. ` +
                 `To use Codex library, you need to activate it with identifier "Sheets".` +
                 `Documentation: https://developers.google.com/apps-script/guides/services/advanced`
             );
@@ -71,6 +71,7 @@ class Codex {
          * @private
          */
         this._sheetID = sheetId;
+        if (typeof sheetId !== 'string') throw Error(`${this._log} sheetID is not a string.`)
 
 
         /**
@@ -78,9 +79,9 @@ class Codex {
          * @type {GoogleAppsScript.Spreadsheet.Spreadsheet}
          * @private
          */
-        this._sheet;                                                                        // Declara variável
-        try { this._sheet = SpreadsheetApp.openById(this._sheetID) }                        // Carrega planilha
-        catch (e) { throw Error(`${this._log} - Failed to load spreadsheet: ${e.stack}`) }; // Retorna algum erro
+        this._sheet;                                                                            // Declara variável
+        try { this._sheet = SpreadsheetApp.openById(this._sheetID) }                            // Carrega planilha
+        catch (e) { throw Error(`${this._log} Failed to load spreadsheet. \n\n${e.stack}`) };   // Retorna algum erro
 
 
         /**
@@ -89,6 +90,7 @@ class Codex {
          * @private
          */
         this._tableName = tableName;
+        if (typeof tableName !== 'string') throw Error(`${this._log} tableName is not a string.`)
 
 
         /**
@@ -98,7 +100,7 @@ class Codex {
          */
         this._table;                                                                        // Declara variável
         try { this._table = this._sheet.getSheetByName(this._tableName) }                   // Carrega página
-        catch (e) { throw Error(`${this._log} - Failed to load sheet/tab: ${e.stack}`) };   // Retorna outros erros
+        catch (e) { throw Error(`${this._log} Failed to load sheet/tab. \n\n${e.stack}`) }  // Retorna outros erros
 
 
         /**
@@ -115,6 +117,8 @@ class Codex {
          * @private
          */
         this._keyColumnName = keyColumnName;
+        if (typeof keyColumnName !== 'string') throw Error(`${this._log} keyColumnName is not a string.`)
+
 
 
         /**
@@ -130,6 +134,9 @@ class Codex {
             columns: [],
             ...options
         };
+        if (this._options.mode !== 'minimal' && this._options.mode !== 'full' ) throw Error(`${this._log} Invalid mode: ${this._options.mode}`)
+        for (let c of this._options.columns) if (typeof c !== 'string') throw Error(`${this._log} Column "${c}" is not a string.`)
+        
 
 
         /**
@@ -170,13 +177,13 @@ class Codex {
                     let keys = this._getRowIndexesByKey(true, columnIndexes)            // Obtém keys
                     this._keys = new Map([...keys.keys()].map(k => [k, "unmodified"]))  // Adiciona keys ao Map mestre
                 }
-                catch (e) { throw Error(`${this._log} - Error to get values: ${e.stack}`) }     // Retorna erros
+                catch (e) { throw Error(`${this._log} Error to get values. \n\n${e.stack}`) }     // Retorna erros
                 break;
 
             case "full":
 
                 try { this._fetchNewData(true, columnIndexes) }                                 // Requisita dados
-                catch (e) { throw Error(`${this._log} - Error to get values: ${e.stack}`) }     // Retorna erros
+                catch (e) { throw Error(`${this._log} Error to get values. \n\n${e.stack}`) }   // Retorna erros
                 break;
         }
     }
@@ -240,19 +247,19 @@ class Codex {
 
         // Procura coluna de índices
         try { keys_colIdx = columnIndexes.get(this._keyColumnName) }                        // Procura pelo nome
-        catch (e) { throw Error(`Error locating keyColumn: ${e.stack}`) }    // Retorna outros erros
+        catch (e) { throw Error(`Error locating keyColumn: \n\n${e.stack}`) }    // Retorna outros erros
         if (keys_colIdx == undefined) throw Error(`keyColumn not found`)     // Se não achar coluna, lança erro
 
         try {
 
             // Modo rápido
             if (mode == "SINGLE") {
-                let index = this._table.getRange(2, keys_colIdx + 1, lastRow)   // Obtém range de keys
-                    .createTextFinder(requestedKeys).matchEntireCell(true)      // Pesquisa na planilha
-                    .findPrevious()                                             // Obtém índice da última instância
-                if (index === null) throw Error(`Error locating key.`)          // Se não tem key, retorna erro
-                rowIndexes.set(requestedKeys, index.getRow() - 1)               // Adiciona indice no Map
-                return rowIndexes                                               // Encerra execução
+                let index = this._table.getRange(2, keys_colIdx + 1, lastRow - 1)   // Obtém range de keys
+                    .createTextFinder(requestedKeys).matchEntireCell(true)          // Pesquisa na planilha
+                    .findPrevious()                                                 // Obtém índice da última instância
+                if (index === null) throw Error(`Error locating key.`)              // Se não tem key, retorna erro
+                rowIndexes.set(requestedKeys, index.getRow() - 1)                   // Adiciona indice no Map
+                return rowIndexes                                                   // Encerra execução
             }
 
             if (lastRow >= 2) { // Se planilha não está vazia
@@ -286,7 +293,7 @@ class Codex {
                 if (rowIndexes.size === 0) throw Error(`Error locating keys.`)
                 return rowIndexes
             }
-        } catch (e) { throw Error(`Error to get keys: ${e.stack}`) }  // Retorna outros erros
+        } catch (e) { throw Error(`Error to get keys: \n\n${e.stack}`) }  // Retorna outros erros
     }
 
     /**
@@ -533,7 +540,7 @@ class Codex {
             case "COLUMNS-SAFETY":
 
                 // Avisa o usuário sobre o uso do modo de segurança
-                console.warn(`${this._log} - Too much data, activating safety mode. Consider requesting fewer columns or using minimal mode with .search() to increase speed.`)
+                console.warn(`${this._log} Too much data, activating safety mode. Consider requesting fewer columns or using minimal mode with .search() to increase speed.`)
 
                 // Obtém dados de key
                 let keyData = SAFEMODE_getValuesByGridRange(this._table, requestedData.get(this._keyColumnName).gridRange).map(([v]) => String(v).trim())
@@ -591,7 +598,7 @@ class Codex {
             case "ROWS-SAFETY":
 
                 // Avisa o usuário sobre o uso do modo de segurança
-                console.warn(`${this._log} - Too much data, activating safety mode. Consider requesting fewer rows or using minimal mode with .search() to increase speed.`)
+                console.warn(`${this._log} Too much data, activating safety mode. Consider requesting fewer rows or using minimal mode with .search() to increase speed.`)
 
                 let mergedRequestedRows = SAFEMODE_mergeGridRanges(requestedData, "ROWS")       // Mescla as requisições
                 let safe_colOffset = Math.min(...columnIndexes.values())                        // Obtém o offset de colunas
