@@ -133,23 +133,6 @@ class Codex {
 
 
         /**
-         * Conjunto contendo todas as chaves (IDs) identificadas na planilha.
-         * Utilizado para verificar a existência de registros sem necessariamente carregar seus dados.
-         * @type {Set<string>}
-         * @private
-         */
-        this._allkeys = new Set();
-
-
-        /**
-         * Conjunto contendo as chaves (IDs) cujos dados completos já foram carregados em memória.
-         * @type {Set<string>}
-         * @private
-         */
-        this._loadedkeys = new Set();
-
-
-        /**
          * Mapa contendo os registros carregados da planilha.
          * Associa cada identificador único ao seu respectivo objeto de dados de linha.
          * @type {Map<string, Object>}
@@ -161,10 +144,10 @@ class Codex {
         /**
          * Mapa que rastreia o status de sincronização das chaves alteradas na transação atual.
          * Associa a key do registro ao seu estado pendente para o próximo commit.
-         * @type {Map<string, ("new"|"modified"|"deleted")>}
+         * @type {Map<string, ("unmodified"|"new"|"modified"|"deleted")>}
          * @private
          */
-        this._keyStatus = new Map();
+        this._keys = new Map();
 
 
         /**
@@ -175,11 +158,8 @@ class Codex {
         this._wipeOnCommit = false;
 
 
-
         // Carrega dados de índices de colunas
         let columnIndexes = this._getColumnIndexes()
-
-
 
         // Obtém dados baseados no modo de operação
         switch (this._options.mode) {
@@ -187,9 +167,9 @@ class Codex {
             case "minimal":
 
                 try {
-                    let keys = this._getRowIndexesByKey(true, columnIndexes)    // Obtém keys
-                    this._allkeys = new Set([...keys.keys()])                   // Adiciona keys ao Set mestre
-                }                                 // Requisita dados
+                    let keys = this._getRowIndexesByKey(true, columnIndexes)            // Obtém keys
+                    this._keys = new Map([...keys.keys()].map(k => [k, "unmodified"]))  // Adiciona keys ao Map mestre
+                }
                 catch (e) { throw Error(`${this._log} - Error to get values: ${e.stack}`) }     // Retorna erros
                 break;
 
@@ -229,7 +209,7 @@ class Codex {
             columnIndexes = filteredColumnIndexes                                                   // Atualiza var de retorno
         }
 
-        // Retorna array de índices
+        // Retorna map de índices
         return columnIndexes
     }
 
@@ -269,8 +249,9 @@ class Codex {
             if (mode == "SINGLE") {
                 let index = this._table.getRange(2, keys_colIdx + 1, lastRow)   // Obtém range de keys
                     .createTextFinder(requestedKeys).matchEntireCell(true)      // Pesquisa na planilha
-                    .findPrevious().getRow() - 1                                // Obtém índice da última instância
-                rowIndexes.set(requestedKeys, index)                            // Adiciona indice no Map
+                    .findPrevious()                                             // Obtém índice da última instância
+                if (index === null) throw Error(`Error locating key.`)          // Se não tem key, retorna erro
+                rowIndexes.set(requestedKeys, index.getRow() - 1)               // Adiciona indice no Map
                 return rowIndexes                                               // Encerra execução
             }
 
@@ -302,24 +283,22 @@ class Codex {
                 })
 
                 // Encerra execução
+                if (rowIndexes.size === 0) throw Error(`Error locating keys.`)
                 return rowIndexes
             }
         } catch (e) { throw Error(`Error to get keys: ${e.stack}`) }  // Retorna outros erros
     }
 
-
-
     /**
      * Requisita novos dados da planilha via API avançada e realiza o pivoteamento para o cache interno.
-     * Suporta busca por colunas completas (modo COLUMNS) ou por linhas específicas (modo ROWS).
-     * * @param {number[]|boolean} requestedRows - Array com índices de linhas (1-based) para busca seletiva, 
-     * ou true para realizar a requisição de colunas completas.
+     * Suporta busca completa ou por chaves específicas.
+     * * @param {string[]|boolean} requestedKeys - Chaves para serem buscadas, ou true para realizar a requisição de colunas completas.
      * @param {Map<string, number>} [columnIndexes] - Mapa contendo os nomes das colunas e seus respectivos 
      * índices. Caso omitido, utiliza o mapeamento padrão da instância.
-     * @throws {Error} Se o parâmetro requestedRows não for um array nem o valor booleano true.
+     * @throws {Error} Se o parâmetro requestedKeys não for um array nem o valor booleano true.
      * @private
      */
-    _fetchNewData(requestedRows, columnIndexes) {
+    _fetchNewData(requestedKeys, columnIndexes) {
 
         // HELPERS
 
@@ -453,11 +432,14 @@ class Codex {
 
 
         // Valida parâmetros
-        if (!Array.isArray(requestedRows) && requestedRows != true) throw Error(`Invalid requestedRows.`)
+        if (!Array.isArray(requestedKeys) && requestedKeys != true) throw Error(`Invalid requestedKeys.`)
 
         let requestedData = new Map()                                               // Informações de dados a serem requeridos para a API
-        let mode = Array.isArray(requestedRows) ? "ROWS" : "COLUMNS"                // Define modo de execução
+        let mode = Array.isArray(requestedKeys) ? "ROWS" : "COLUMNS"                // Define modo de execução
         if (columnIndexes == undefined) columnIndexes = this._getColumnIndexes()    // Obtém índices de colunas, caso não recebido
+        let requestedRows = mode === "ROWS" ?                                       // Caso modo de linhas
+            [...this._getRowIndexesByKey(requestedKeys).values()] :                     // Obtém índice das linhas
+            undefined                                                                  // Caso não, mantém indefinido
 
         // Monta os objetos de requisição
         switch (mode) {
@@ -544,8 +526,7 @@ class Codex {
 
                     // Armazena resutados
                     this._data.set(String(key).trim(), obj)
-                    this._loadedkeys.add(String(key).trim())
-                    this._allkeys.add(String(key).trim())
+                    this._keys.set(String(key).trim(), "unmodified")
                 })
                 break;
 
@@ -560,8 +541,7 @@ class Codex {
                 // Registra IDs nos metadados de keys
                 for (let key of keyData) {
                     if (key === undefined || key === null || key === "") continue;
-                    this._loadedkeys.add(key)
-                    this._allkeys.add(key)
+                    this._keys.set(key, "unmodified")
                     this._data.set(key, {})
                     this._data.get(key)[this._keyColumnName] = key
                 }
@@ -579,7 +559,7 @@ class Codex {
                     workingArray.forEach((row, rowInd) => row.forEach((value, colInd) => {
 
                         let currentKey = keyData[rowInd]                            // Obtém key atual
-                        if (!this._allkeys.has(currentKey)) return;                 // Se ID inválido, ignorar
+                        if (!this._keys.has(currentKey)) return;                    // Se ID inválido, ignorar
                         this._data.get(currentKey)[colNames[colInd]] = value;       // Armazena valor na memória
                     }))
                 })
@@ -604,8 +584,7 @@ class Codex {
 
                     // Armazena resutados
                     this._data.set(String(row[keyIndex]).trim(), obj)
-                    this._loadedkeys.add(String(row[keyIndex]).trim())
-                    this._allkeys.add(String(row[keyIndex]).trim())
+                    this._keys.set(String(row[keyIndex]).trim(), "unmodified")
                 })
                 break;
 
@@ -633,8 +612,7 @@ class Codex {
 
                         // Armazena resutados
                         this._data.set(String(row[safe_keyIndex]).trim(), obj)
-                        this._loadedkeys.add(String(row[safe_keyIndex]).trim())
-                        this._allkeys.add(String(row[safe_keyIndex]).trim())
+                        this._keys.set(String(row[safe_keyIndex]).trim(), "unmodified")
                     })
                 })
                 break;
@@ -650,11 +628,11 @@ class Codex {
     _setKeyAs(key, newState) {
 
         // Obtém estado atual da chave
-        let actualState = this._keyStatus.get(key)
+        let actualState = this._keys.get(key)
 
-        // Caso não possua estado definido, adiciona estado e encerra
-        if (actualState === undefined) {
-            this._keyStatus.set(key, newState)
+        // Caso não tenha sido modificado, adiciona estado e encerra
+        if (actualState === "unmodified") {
+            this._keys.set(key, newState)
             return undefined
         }
 
@@ -665,17 +643,17 @@ class Codex {
         switch (actualState) {
 
             case "new":
-                if (newState == "deleted") this._keyStatus.delete(key);
+                if (newState == "deleted") this._keys.delete(key);
                 // if (newState == "modified") deve manter o estado como "new" 
                 break;
 
             case "modified":
                 // if (newState == "new") não é uma operação válida
-                if (newState == "deleted") this._keyStatus.set(key, "deleted");
+                if (newState == "deleted") this._keys.set(key, "deleted");
                 break;
             case "deleted":
                 // Adicionar uma chave deletada a reativa modificando o valor.
-                if (newState == "new") this._keyStatus.set(key, "modified");
+                if (newState == "new") this._keys.set(key, "modified");
             // if (newState == "modified") não reabilita a chave. 
         }
     }
@@ -691,11 +669,9 @@ class Codex {
      * of the spreadsheet on the next commit.
      */
     clear() {
-        this._wipeOnCommit = true;      // Marca planilha para exclusão
-        this._keyStatus.clear();        // Limpa histórico de mudanças
-        this._data.clear();             // Limpa memória da instancia
-        this._allkeys.clear();          // Limpa memória de todas as chaves
-        this._loadedkeys.clear();       // Limpa memória de chaves carregadas
+        this._wipeOnCommit = true;  // Marca planilha para exclusão
+        this._keys.clear();         // Limpa histórico de mudanças
+        this._data.clear();         // Limpa memória da instancia
     }
 
     /**
@@ -706,13 +682,12 @@ class Codex {
      */
     delete(key) {
 
-        key = String(key).trim()                    // Formata key
-        let isDeleteable = this._allkeys.has(key)   // Verifica se há um dado a ser excluido
+        key = String(key).trim()                // Formata key
+        let isDeleteable = this._keys.has(key)   // Verifica se há um dado a ser excluido
 
         // Caso deletável
         if (isDeleteable) {
             this._data.delete(key)          // Remove da memória
-            this._allkeys.delete(key)       // Remove das keys existentes
             this._setKeyAs(key, "deleted")  // Marca como deletado
         }
 
@@ -720,19 +695,38 @@ class Codex {
         return isDeleteable
     }
 
+    /**
+     * Checks if a specific key exists in the instance.
+     * @param {string} key - The unique identifier (ID) to check.
+     * @returns {boolean} `true` if the key exists and is active; `false` otherwise.
+     */
+    has(key) {
+        let keyStatus = this._keys.get(String(key).trim())  // Obtém estado
+        if (keyStatus === undefined) return false           // Se não existe, false
+        if (keyStatus === "deleted") return false           // Se deletado, false
+        return true                                         // Retorna que existe
+    }
 
-
-    /*     get(key) {
+    /*
     
-            key = String(key).trim()                // Formata key
-            requestedData = this._data.get(key)     // Obtém o dado requisitado
+        get(key) {
+    
+            key = String(key).trim()                        // Formata a key
+            let keyStatus = this._keys.get(key)             // Obtém estado da key
+            if (keyStatus === undefined) return undefined   // Se não existe, encerra
+            if (keyStatus === "deleted") return undefined   // Se deletada, encerra
+            let keyLoaded = this._data.has(key)             // Verifica se carregado
+    
+    
+            // Se key não existe, encerrar
+    
     
             // Retorna vazio caso planilha zerada e dado não estar na memória
-            if (this._wipeOnCommit && requestedData === undefined) return undefined
+            if (this._wipeOnCommit && requestedData) return undefined
     
-    
-    
-        } */
+        }
+    */
+
 
 
 }
