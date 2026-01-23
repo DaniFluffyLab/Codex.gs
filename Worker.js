@@ -134,9 +134,9 @@ class Codex {
             columns: [],
             ...options
         };
-        if (this._options.mode !== 'minimal' && this._options.mode !== 'full' ) throw Error(`${this._log} Invalid mode: ${this._options.mode}`)
+        if (this._options.mode !== 'minimal' && this._options.mode !== 'full') throw Error(`${this._log} Invalid mode: ${this._options.mode}`)
         for (let c of this._options.columns) if (typeof c !== 'string') throw Error(`${this._log} Column "${c}" is not a string.`)
-        
+
 
 
         /**
@@ -665,6 +665,129 @@ class Codex {
         }
     }
 
+    /**
+     * Valida e converte dados para armazenamento no Google Sheets.
+     * * Esta função atua como um motor de processamento recursivo que converte tipos complexos 
+     * do JavaScript (como Map, Set, BigInt e RegExp) em formatos e tamanhos compatíveis com
+     * as células da planilha.
+     * @param {*} value - O dado a ser processado (Primitivos, Coleções ou Objetos).
+     * @param {boolean} [runConversion=false] - Se verdadeiro, efetivamente converte o dado. 
+     * Se falso, valida o dado para o commit .
+     * @param {number} [depth=0] - Uso interno para recursão.
+     * @returns {*} O valor enviado:
+     * - `runConversion = true`: Retorna strings (JSON ou Primitivos) prontas para o Sheets.
+     * - `runConversion = false`: Retorna o mesmo valor enviado.
+     * * @throws {Error} Se a profundidade de aninhamento exceder 25 níveis.
+     * @throws {Error} Se uma string resultante (JSON ou texto) ultrapassar 50.000 caracteres.
+     * @throws {Error} Se chaves de um `Map` não forem do tipo `string` ou `number`.
+     * @throws {Error} Se o tipo de dado não for suportado pela biblioteca.
+     * @private
+     */
+    _typeJStoGS(value, runConversion = false, depth = 0) {
+
+        let convertedValue;
+
+        // Valida dado baseado no tipo
+        switch (typeof value) {
+
+            // Não necessita validar
+            case 'number':
+            case 'boolean':
+                return value;
+
+            case 'undefined':
+                // Retorna undefined ou string vazia (commit)
+                if (runConversion) { return "" } else { return undefined };
+
+
+            case 'string':
+                if (value.length > 50000) throw Error(`The input contains more than the maximum limit of 50,000 characters in a single cell.`)
+                return value;
+
+            case 'bigint':
+
+                // Obtém maiores números possíveis em Integer
+                const maxint = BigInt(Number.MAX_SAFE_INTEGER);
+                const minint = BigInt(Number.MIN_SAFE_INTEGER);
+
+                // Se não compatível com Integer, converter para String
+                if (value > maxint || value < minint) {
+                    convertedValue = String(value);
+                    if (convertedValue.length > 50000) throw Error(`The input contains more than the maximum limit of 50,000 characters in a single cell.`)
+                    if (runConversion) { return convertedValue } else { return value };
+                }
+
+                // Converte para Integer seguramente
+                if (runConversion) { return Number(value) } else { return value };
+
+            case 'object':
+
+                // NULL
+                if (value === null) {
+                    if (runConversion) { return "" } else { return null };     // Retorna nulo ou string vazia (commit)
+                }
+
+                // DATAS
+                if (value instanceof Date) {
+                    if (runConversion) { return isNaN(value.getTime()) ? "Invalid date" : value }  // Caso commit, limpa data inválida
+                    else { return value }                                                       // Se não, retorna valor     
+                }
+
+                // REGEX
+                if (value instanceof RegExp) {
+                    convertedValue = value.toString()
+                    if (convertedValue.length > 50000) throw Error(`The input contains more than the maximum limit of 50,000 characters in a single cell.`)
+                    if (runConversion) { return convertedValue } else { return value };
+                }
+
+                // ARRAY ou SET
+                if (value instanceof Array || value instanceof Set) {
+
+                    convertedValue = [...value]                                                                     // Cria cópia de segurança
+                    if (depth < 25) convertedValue = convertedValue.map(v => this._typeJStoGS(v, depth + 1, true))  // Limpa até 25 camadas
+                    if (depth == 25) throw Error(`The inputed array contains more than 25 levels of depth.`)        // Para de converter acima de 25 camadas
+                    if (depth != 0) return convertedValue                                                           // Caso em recursão, retorna valor convertido
+
+                    // Valida tamanho da string
+                    convertedValue = JSON.stringify(convertedValue)
+                    if (convertedValue.length > 50000) throw Error(`The input contains more than the maximum limit of 50,000 characters in a single cell.`)
+
+                    // Encerra execução
+                    if (runConversion) { return convertedValue } else { return value };
+                }
+
+                // OBJETO LITERAL OU MAP
+                if (Object.prototype.toString.call(value) === '[object Object]' || value instanceof Map) {
+
+                    // Obtém o encadeamento chave / valor
+                    if (value instanceof Map) {
+                        convertedValue = [...value.entries()]
+                        // Executa uma validação simples nas keys
+                        for (let [key] of convertedValue) {
+                            if (typeof key !== 'number' && typeof key !== 'string') throw Error(`Maps with not-string or not-number keys are not supported.`)
+                        }
+                    }
+                    else convertedValue = Object.entries(value)
+
+                    if (depth < 25) convertedValue = convertedValue.map(([k, v]) => [k, this._typeJStoGS(v, depth + 1, true)])  // Limpa até 25 camadas
+                    if (depth == 25) throw Error(`The inputed object contains more than 25 levels of depth.`)                   // Para de converter acima de 25 camadas
+                    if (depth != 0) return Object.fromEntries(convertedValue)                                                                       // Caso em recursão, retorna valor convertido
+
+                    // Valida tamanho da string
+                    convertedValue = JSON.stringify(Object.fromEntries(convertedValue))
+                    if (convertedValue.length > 50000) throw Error(`The input contains more than the maximum limit of 50,000 characters in a single cell.`)
+
+                    // Encerra execução
+                    if (runConversion) { return convertedValue } else { return value };
+
+                }
+
+            default:
+                throw Error(`Value ${value} not supported.`)
+        }
+    }
+
+
 
 
 
@@ -723,16 +846,9 @@ class Codex {
             if (keyStatus === undefined) return undefined   // Se não existe, encerra
             if (keyStatus === "deleted") return undefined   // Se deletada, encerra
             let keyLoaded = this._data.has(key)             // Verifica se carregado
-    
-    
-            // Se key não existe, encerrar
-    
-    
-            // Retorna vazio caso planilha zerada e dado não estar na memória
-            if (this._wipeOnCommit && requestedData) return undefined
-    
+            if (!keyLoaded) this._fetchNewData([key])       // Requisita o load do dado    
         }
-    */
+        */
 
 
 
