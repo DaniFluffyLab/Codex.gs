@@ -18,6 +18,7 @@ class Codex {
      * @param {Object} options - Configuration options for initialization.
      * @param {("full"|"minimal")} options.mode - Defines whether the spreadsheet should be pre-loaded into memory or requested on demand.
      * @param {string[]} [options.columns] - Array of specific column names to be eager-loaded during instantiation.
+     * @param {boolean} [options.enableTypeInference] - Allow Codex to infer rich types, like Arrays and Objects, from data.
      *
      * @throws {Error} If the "Google Sheets API" Advanced Service is not enabled with the identifier "Sheets".
      * @throws {Error} If the spreadsheet or the specified tab cannot be accessed.
@@ -126,12 +127,14 @@ class Codex {
          * @type {{
          * mode: ("minimal"|"full"),
          * columns: string[]
+         * enableTypeInference: boolean
          * }}
          * @private
          */
         this._options = {
             mode: "minimal",
             columns: [],
+            enableTypeInference: true,
             ...options
         };
         if (this._options.mode !== 'minimal' && this._options.mode !== 'full') throw Error(`${this._log} Invalid mode: ${this._options.mode}`)
@@ -531,6 +534,9 @@ class Codex {
                     // Para cada coluna solicitada, cria a propriedade e armazena o valor no objeto
                     columnIndexes.forEach((colIndex, colName) => obj[colName] = columnsData.get(colIndex)[rowInd] ?? null)
 
+                    // Caso solicitado, converte valores dos objetos
+                    if (this._options.enableTypeInference) obj = this._typeGStoJS(obj)
+
                     // Armazena resutados
                     this._data.set(String(key).trim(), obj)
                     this._keys.set(String(key).trim(), "unmodified")
@@ -565,9 +571,10 @@ class Codex {
                     // Para cada linha
                     workingArray.forEach((row, rowInd) => row.forEach((value, colInd) => {
 
-                        let currentKey = keyData[rowInd]                            // Obtém key atual
-                        if (!this._keys.has(currentKey)) return;                    // Se ID inválido, ignorar
-                        this._data.get(currentKey)[colNames[colInd]] = value;       // Armazena valor na memória
+                        let currentKey = keyData[rowInd]                                        // Obtém key atual
+                        if (!this._keys.has(currentKey)) return;                                // Se ID inválido, ignorar
+                        if (this._options.enableTypeInference) value = this._typeGStoJS(value)  // Caso solicitado, converte valores dos objetos
+                        this._data.get(currentKey)[colNames[colInd]] = value;                   // Armazena valor na memória
                     }))
                 })
                 break;
@@ -588,6 +595,9 @@ class Codex {
 
                     // Para cada coluna solicitada, cria a propriedade e armazena o valor no objeto
                     columnIndexes.forEach((colInd, colName) => obj[String(colName).trim()] = row[colInd - colOffset] ?? null)
+
+                    // Caso solicitado, converte valores dos objetos
+                    if (this._options.enableTypeInference) obj = this._typeGStoJS(obj)
 
                     // Armazena resutados
                     this._data.set(String(row[keyIndex]).trim(), obj)
@@ -616,6 +626,9 @@ class Codex {
 
                         // Para cada coluna solicitada, cria a propriedade e armazena o valor no objeto
                         columnIndexes.forEach((colInd, colName) => obj[String(colName).trim()] = row[colInd - safe_colOffset] ?? null)
+
+                        // Caso solicitado, converte valores dos objetos
+                        if (this._options.enableTypeInference) obj = this._typeGStoJS(obj)
 
                         // Armazena resutados
                         this._data.set(String(row[safe_keyIndex]).trim(), obj)
@@ -744,7 +757,7 @@ class Codex {
                 if (value instanceof Array || value instanceof Set) {
 
                     convertedValue = [...value]                                                                     // Cria cópia de segurança
-                    if (depth < 25) convertedValue = convertedValue.map(v => this._typeJStoGS(v, depth + 1, true))  // Limpa até 25 camadas
+                    if (depth < 25) convertedValue = convertedValue.map(v => this._typeJStoGS(v, true,  depth + 1))  // Limpa até 25 camadas
                     if (depth == 25) throw Error(`The inputed array contains more than 25 levels of depth.`)        // Para de converter acima de 25 camadas
                     if (depth != 0) return convertedValue                                                           // Caso em recursão, retorna valor convertido
 
@@ -769,7 +782,7 @@ class Codex {
                     }
                     else convertedValue = Object.entries(value)
 
-                    if (depth < 25) convertedValue = convertedValue.map(([k, v]) => [k, this._typeJStoGS(v, depth + 1, true)])  // Limpa até 25 camadas
+                    if (depth < 25) convertedValue = convertedValue.map(([k, v]) => [k, this._typeJStoGS(v, true, depth + 1)])  // Limpa até 25 camadas
                     if (depth == 25) throw Error(`The inputed object contains more than 25 levels of depth.`)                   // Para de converter acima de 25 camadas
                     if (depth != 0) return Object.fromEntries(convertedValue)                                                                       // Caso em recursão, retorna valor convertido
 
