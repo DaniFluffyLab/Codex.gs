@@ -787,8 +787,75 @@ class Codex {
         }
     }
 
+    /**
+         * Converte dados brutos vindos do Google Sheets para tipos nativos do JavaScript.
+         * * Esta função é a contraparte simétrica de `_typeJStoGS`. Ela analisa o valor bruto 
+         * recebido (geralmente de uma célula da planilha) e tenta identificar se ele representa 
+         * uma estrutura complexa que foi serializada, como JSON (Arrays e Objetos), 
+         * Expressões Regulares (RegExp) ou strings de Data em formato ISO.
+         * * @param {*} value - O valor bruto a ser processado.
+         * @returns {*} O valor reidratado para o tipo nativo mais rico identificado.
+         * @private
+         */
+    _typeGStoJS(value) {
+        switch (typeof value) {
 
+            // Não processar casos nativos
+            case "number":
+            case "boolean":
+            case "undefined":
+                return value
 
+            // Caso objeto, desambiguar:
+            case "object":
+
+                // NULL 
+                if (value === null) return null
+
+                // DATA
+                if (value instanceof Date) return value
+
+                // ARRAY
+                if (value instanceof Array) {
+                    return value.map(v => this._typeGStoJS(v))
+                }
+
+                // OBJETO LITERAL
+                if (Object.prototype.toString.call(value) === '[object Object]') {
+                    let entries = Object.entries(value)                                     // Desmonta
+                    let parsedEntries = entries.map(([k, v]) => [k, this._typeGStoJS(v)])   // Roda recursivamente
+                    return Object.fromEntries(parsedEntries)                                // Remonta
+                }
+
+            // Caso string, desambiguar
+            case "string":
+
+                // DATA ISO
+                let regex_DateISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}.\d{3}Z$/
+                if (regex_DateISO.test(value)) try {
+                    let date = new Date(value)
+                    if (!isNaN(date.getTime())) return date
+                } catch (e) { }
+
+                // ARRAYS E OBJECTS
+                let regex_JSON = /^\s*[\{\[][\s\S]*[\}\]]\s*$/
+                if (regex_JSON.test(value)) try {
+                    let object = JSON.parse(value)
+                    return this._typeGStoJS(object)
+                } catch (e) { }
+
+                // REGEX
+                let regex_RegexString = /^\/((?:\\\/|[^\/])+)\/([gimuyvd]*)$/
+                if (regex_RegexString.test(value)) try {
+                    let [fullmatch, pattern, flags] = value.match(regex_RegexString)
+                    return new RegExp(pattern, flags)
+                } catch (e) { }
+
+            // Padrão, retornar valor recebido
+            default: return value
+
+        }
+    }
 
 
 
