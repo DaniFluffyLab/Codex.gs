@@ -150,6 +150,13 @@ class Codex {
          */
         this._data = new Map();
 
+        /**
+         * Mapa de cache contendo os proxies dos registros obtidos via funções de requisição.
+         * Associa cada objeto original ao seu respectivo proxy.
+         * @type {WeakMap<Object, Object>}
+         * @private
+         */
+        this._proxies = new WeakMap();
 
         /**
          * Mapa que rastreia o status de sincronização das chaves alteradas na transação atual.
@@ -757,7 +764,7 @@ class Codex {
                 if (value instanceof Array || value instanceof Set) {
 
                     convertedValue = [...value]                                                                     // Cria cópia de segurança
-                    if (depth < 25) convertedValue = convertedValue.map(v => this._typeJStoGS(v, true,  depth + 1))  // Limpa até 25 camadas
+                    if (depth < 25) convertedValue = convertedValue.map(v => this._typeJStoGS(v, true, depth + 1))  // Limpa até 25 camadas
                     if (depth == 25) throw Error(`The inputed array contains more than 25 levels of depth.`)        // Para de converter acima de 25 camadas
                     if (depth != 0) return convertedValue                                                           // Caso em recursão, retorna valor convertido
 
@@ -843,6 +850,9 @@ class Codex {
             // Caso string, desambiguar
             case "string":
 
+                // undefined
+                if (value === "") return undefined
+
                 // DATA ISO
                 let regex_DateISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}.\d{3}Z$/
                 if (regex_DateISO.test(value)) try {
@@ -868,6 +878,73 @@ class Codex {
             default: return value
 
         }
+    }
+
+    /**
+     * Cria um Proxy recursivo para monitoramento de mutações e rastreamento de estado.
+     * * @param {object} value - O objeto, array ou estrutura mutável a ser monitorada.
+     * @param {string} key - A Chave Primária (ID) da linha à qual este dado pertence.
+     * @returns {object} Um Proxy que se comporta como o objeto original, mas rastreia mudanças.
+     * @throws {Error} Se houver tentativa de modificar a coluna de Chave Primária.
+     * @throws {Error} Se uma operação ilegal for detectada em tipos não suportados.
+     * @private
+     */
+    _createProxy(value, key) {
+
+        // Retorna proxy do cache se existir
+        if (this._proxies.has(value)) return this._proxies.get(value)
+
+        // Cria a trap de edições para commits
+        let proxyHandlers = {
+            set: (ogObj, colName, value) => {
+
+                // Impede escrita de valores na coluna de keys.
+                if (colName === this._keyColumnName) throw Error(`Key values are not writable.`)
+
+                let cleanValue = this._typeJStoGS(value)        // Garante que a informação é compatível
+                this._keys.set(key, "modified")                 // Marca o objeto como modificado
+                return Reflect.set(ogObj, colName, cleanValue)  // Edita o objeto
+            },
+
+            get: (ogObj, colName) => {
+
+                // Obtém objeto e alterna comportamento conforme tipo
+                let value = Reflect.get(ogObj, colName)
+                switch (typeof value) {
+
+                    // Tipos primitivos não usam proxy
+                    case "string":
+                    case "number":
+                    case "bigint":
+                    case "boolean":
+                    case "undefined":
+                        return value;
+
+                    // Funções não usam proxies e precisam da referecia original no this
+                    case "function":
+                        return (...args) => {
+                            this._keys.set(key, "modified")
+                            return value.apply(ogObj, args)
+                        }
+
+                    // Variar comportamento para proxies
+                    case "object":
+
+                        if (value === null) return null                 // NULL
+                        if (value instanceof RegExp) return value       // REGEX
+                        return this._createProxy(value, key)   // OUTROS
+
+                    // Tipos que não deveriam existir retornam erro
+                    default:
+                        throw Error(`Illegal operation.`)
+                }
+            }
+        }
+
+        // Cria novo proxy
+        let newProxy = new Proxy(value, proxyHandlers)
+        this._proxies.set(value, newProxy)
+        return newProxy
     }
 
 
@@ -917,21 +994,38 @@ class Codex {
         return true                                         // Retorna que existe
     }
 
-    /*
-    
-        get(key) {
-    
-            key = String(key).trim()                        // Formata a key
-            let keyStatus = this._keys.get(key)             // Obtém estado da key
-            if (keyStatus === undefined) return undefined   // Se não existe, encerra
-            if (keyStatus === "deleted") return undefined   // Se deletada, encerra
-            let keyLoaded = this._data.has(key)             // Verifica se carregado
-            if (!keyLoaded) this._fetchNewData([key])       // Requisita o load do dado    
+
+    /**
+     * Retrieves a record by its unique Primary Key.
+     * * @param {string|number} key - The unique identifier (ID) of the record.
+     * @returns {Object|undefined} The data associated with the key, or `undefined` if the key does not exist or is marked as deleted.
+     * * @example
+     * const user = db.get("user_01");
+     * if (user) {
+     * user.lastLogin = new Date(); // Automatically marked as 'modified'
+     * }
+     */
+    get(key) {
+        key = String(key).trim()                        // Formata a key
+        let keyStatus = this._keys.get(key)             // Obtém estado da key
+        if (keyStatus === undefined) return undefined   // Se não existe, encerra
+        if (keyStatus === "deleted") return undefined   // Se deletada, encerra
+        let keyLoaded = this._data.has(key)             // Verifica se carregado
+        if (!keyLoaded) this._fetchNewData([key])       // Requisita o load do dado
+        let requestedData = this._data.get(key)         // Carrega o dado em uma var local
+        return this._createProxy(requestedData, key)    // Cria proxy do objeto e retorna.
+    }
+
+    /**
+     * Returns a generator that yields all active Primary Keys in the store.
+     * * @yields {string} The next active Primary Key.
+     * @returns {IterableIterator<string>} An iterable iterator of non-deleted keys.
+     */
+    *keys() {
+        for (const [key, status] of this._keys) {   // Para cada key
+            if (status !== "deleted") yield key     // Retorna sob demanda as keys
         }
-        */
-
-
-
+    }
 }
 
 
