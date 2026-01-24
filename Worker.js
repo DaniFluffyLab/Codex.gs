@@ -553,7 +553,7 @@ class Codex {
             case "COLUMNS-SAFETY":
 
                 // Avisa o usuário sobre o uso do modo de segurança
-                console.warn(`${this._log} Too much data, activating safety mode. Consider requesting fewer columns or using minimal mode with .search() to increase speed.`)
+                console.warn(`${this._log} Too much data, activating safety mode. Consider requesting fewer columns or using minimal mode with Codex.search() to increase speed.`)
 
                 // Obtém dados de key
                 let keyData = SAFEMODE_getValuesByGridRange(this._table, requestedData.get(this._keyColumnName).gridRange).map(([v]) => String(v).trim())
@@ -615,7 +615,7 @@ class Codex {
             case "ROWS-SAFETY":
 
                 // Avisa o usuário sobre o uso do modo de segurança
-                console.warn(`${this._log} Too much data, activating safety mode. Consider requesting fewer rows or using minimal mode with .search() to increase speed.`)
+                console.warn(`${this._log} Too much data, activating safety mode. Consider requesting fewer rows or using minimal mode with Codex.search() to increase speed.`)
 
                 let mergedRequestedRows = SAFEMODE_mergeGridRanges(requestedData, "ROWS")       // Mescla as requisições
                 let safe_colOffset = Math.min(...columnIndexes.values())                        // Obtém o offset de colunas
@@ -956,9 +956,16 @@ class Codex {
      * of the spreadsheet on the next commit.
      */
     clear() {
-        this._wipeOnCommit = true;  // Marca planilha para exclusão
-        this._keys.clear();         // Limpa histórico de mudanças
-        this._data.clear();         // Limpa memória da instancia
+        try {
+
+            this._wipeOnCommit = true;  // Marca planilha para exclusão
+            this._keys.clear();         // Limpa histórico de mudanças
+            this._data.clear();         // Limpa memória da instancia
+
+        } catch (e) {
+            // Retorna erro.
+            throw Error(`${this._log} ${e.stack}`)
+        }
     }
 
     /**
@@ -968,18 +975,24 @@ class Codex {
      * @returns {boolean} `true` if an element in the Codex object existed and has been removed, or `false` if the element does not exist.
      */
     delete(key) {
+        try {
 
-        key = String(key).trim()                // Formata key
-        let isDeleteable = this._keys.has(key)   // Verifica se há um dado a ser excluido
+            key = String(key).trim()                // Formata key
+            let isDeleteable = this._keys.has(key)   // Verifica se há um dado a ser excluido
 
-        // Caso deletável
-        if (isDeleteable) {
-            this._data.delete(key)          // Remove da memória
-            this._setKeyAs(key, "deleted")  // Marca como deletado
+            // Caso deletável
+            if (isDeleteable) {
+                this._data.delete(key)          // Remove da memória
+                this._setKeyAs(key, "deleted")  // Marca como deletado
+            }
+
+            // Retorna se dado está excluído
+            return isDeleteable
+
+        } catch (e) {
+            // Retorna erro.
+            throw Error(`${this._log} ${e.stack}`)
         }
-
-        // Retorna se dado está excluído
-        return isDeleteable
     }
 
     /**
@@ -988,17 +1001,25 @@ class Codex {
      * @returns {boolean} `true` if the key exists and is active; `false` otherwise.
      */
     has(key) {
-        let keyStatus = this._keys.get(String(key).trim())  // Obtém estado
-        if (keyStatus === undefined) return false           // Se não existe, false
-        if (keyStatus === "deleted") return false           // Se deletado, false
-        return true                                         // Retorna que existe
+        try {
+
+            let keyStatus = this._keys.get(String(key).trim())  // Obtém estado
+            if (keyStatus === undefined) return false           // Se não existe, false
+            if (keyStatus === "deleted") return false           // Se deletado, false
+            return true                                         // Retorna que existe
+
+        } catch (e) {
+            // Retorna erro.
+            throw Error(`${this._log} ${e.stack}`)
+        }
     }
 
 
     /**
      * Retrieves a record by its unique Primary Key.
      * * @param {string|number} key - The unique identifier (ID) of the record.
-     * @returns {Object|undefined} The data associated with the key, or `undefined` if the key does not exist or is marked as deleted.
+     * @returns {Object|undefined} The object associated with the key, with properties being the columns name,
+     * or `undefined` if the key does not exist or is marked as deleted.
      * * @example
      * const user = db.get("user_01");
      * if (user) {
@@ -1006,24 +1027,85 @@ class Codex {
      * }
      */
     get(key) {
-        key = String(key).trim()                        // Formata a key
-        let keyStatus = this._keys.get(key)             // Obtém estado da key
-        if (keyStatus === undefined) return undefined   // Se não existe, encerra
-        if (keyStatus === "deleted") return undefined   // Se deletada, encerra
-        let keyLoaded = this._data.has(key)             // Verifica se carregado
-        if (!keyLoaded) this._fetchNewData([key])       // Requisita o load do dado
-        let requestedData = this._data.get(key)         // Carrega o dado em uma var local
-        return this._createProxy(requestedData, key)    // Cria proxy do objeto e retorna.
+        try {
+
+            key = String(key).trim()                        // Formata a key
+            let keyStatus = this._keys.get(key)             // Obtém estado da key
+            if (keyStatus === undefined) return undefined   // Se não existe, encerra
+            if (keyStatus === "deleted") return undefined   // Se deletada, encerra
+            let keyLoaded = this._data.has(key)             // Verifica se carregado
+            if (!keyLoaded) this._fetchNewData([key])       // Requisita o load do dado
+            let requestedData = this._data.get(key)         // Carrega o dado em uma var local
+            return this._createProxy(requestedData, key)    // Cria proxy do objeto e retorna.
+
+        } catch (e) {
+            // Retorna erro.
+            throw Error(`${this._log} ${e.stack}`)
+        }
     }
 
     /**
-     * Returns a generator that yields all active Primary Keys in the store.
+     * Returns a iterator that contains all active Primary Keys in the store.
      * * @yields {string} The next active Primary Key.
      * @returns {IterableIterator<string>} An iterable iterator of non-deleted keys.
      */
     *keys() {
-        for (const [key, status] of this._keys) {   // Para cada key
-            if (status !== "deleted") yield key     // Retorna sob demanda as keys
+        try {
+
+            for (const [key, status] of this._keys) {   // Para cada key
+                if (status !== "deleted") yield key     // Retorna sob demanda as keys
+            }
+
+        } catch (e) {
+            // Retorna erro.
+            throw Error(`${this._log} ${e.stack}`)
+        }
+    }
+
+
+    /**
+     * Returns a iterator that contains all active values in the store. Only avaliable on mode = full
+     * * @yields {string} The next active value.
+     * @returns {IterableIterator<object>} An iterable iterator of non-deleted values.
+     * @throws {Error} If Codex is not in mode = full.
+     * 
+     */
+    *values() {
+        try {
+
+            // Rejeita uso do método sem estar no modo full.
+            if (this._options.mode != "full") throw Error(`Method Codex.values() is only avaliable on mode = full. Use Codex.search() instead.`)
+
+            for (const [key, status] of this._keys) {           // Para cada key
+                if (status !== "deleted") yield this.get(key)   // Retorna sob demanda os valores
+            }
+
+        } catch (e) {
+            // Retorna erro.
+            throw Error(`${this._log} ${e.stack}`)
+        }
+    }
+
+    /**
+     * Returns a iterator that contains all active entries in the store. Only avaliable on mode = full
+     * * @yields {string} The next active entries.
+     * @returns {IterableIterator<[string, object]>} An iterable iterator of non-deleted entries.
+     * @throws {Error} If Codex is not in mode = full.
+     * 
+     */
+    *entries() {
+        try {
+
+            // Rejeita uso do método sem estar no modo full.
+            if (this._options.mode != "full") throw Error(`Method Codex.entries() is only avaliable on mode = full. Use Codex.search() instead.`)
+
+            for (const [key, status] of this._keys) {                   // Para cada key
+                if (status !== "deleted") yield [key, this.get(key)]    // Retorna sob demanda as chave/valores
+            }
+
+        } catch (e) {
+            // Retorna erro.
+            throw Error(`${this._log} ${e.stack}`)
         }
     }
 }
