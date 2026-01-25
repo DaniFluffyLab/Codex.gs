@@ -100,7 +100,10 @@ class Codex {
          * @private
          */
         this._table;                                                                        // Declara variável
-        try { this._table = this._sheet.getSheetByName(this._tableName) }                   // Carrega página
+        try {
+            this._table = this._sheet.getSheetByName(this._tableName)                       // Carrega página
+            if (this._table === null) throw Error(`Sheet not found`)                        // Lança erro se não houver página
+        }
         catch (e) { throw Error(`${this._log} Failed to load sheet/tab. \n\n${e.stack}`) }  // Retorna outros erros
 
 
@@ -213,12 +216,16 @@ class Codex {
 
         let columnIndexes;                                              // Cria var para índices das colunas
         let lastColumn = this._table.getLastColumn()                    // Obtém última coluna
+
+        // Lança erro se aba completamente vazia
+        if (lastColumn === 0) throw Error(`The sheet "${this._tableName}" is empty (no headers found).`);
+
         let columnArray = this._table.getRange(1, 1, 1, lastColumn)     // Seleciona cabeçalho
             .getValues()[0]                                             // Obtém dados
         columnIndexes = new Map(columnArray.map((v, i) => [v, i]))      // Insere dados dos índices no Map
 
         // Valida a existência de uma coluna de keys
-        if (!columnIndexes.has(this._keyColumnName)) { throw Error(`keyColumnName do not exist in Sheet.`); }
+        if (!columnIndexes.has(this._keyColumnName)) { throw Error(`Primary Key column "${this._keyColumnName}" does not exist.`); }
 
         // Caso não hajam parâmetros sobre quais colunas obter, alimentar com nome de todas as colunas
         if (this._options.columns.size === 0) { this._options.columns = new Set(columnIndexes.keys()) }
@@ -227,7 +234,7 @@ class Codex {
         filteredColumnIndexes.set(this._keyColumnName, columnIndexes.get(this._keyColumnName))  // Garante coluna de key
         for (let columnName of this._options.columns) {                                         // Para cada coluna requisitada:
             let hasInvalid = !columnIndexes.has(columnName)                                         // Verifica a validade da colunas
-            if (hasInvalid) { throw Error(`One or more requested columns do not exist.`); }         // Lança erro se inválido 
+            if (hasInvalid) { throw Error(`Requested column "${columnName}" do not exist.`); }      // Lança erro se inválido 
             filteredColumnIndexes.set(columnName, columnIndexes.get(columnName))                    // Armazena seu valor no Map de filtradas
         }
 
@@ -269,12 +276,11 @@ class Codex {
 
             // Modo rápido
             if (mode == "SINGLE") {
-                let index = this._table.getRange(2, keys_colIdx + 1, lastRow - 1)   // Obtém range de keys
-                    .createTextFinder(requestedKeys).matchEntireCell(true)          // Pesquisa na planilha
-                    .findPrevious()                                                 // Obtém índice da última instância
-                if (index === null) throw Error(`Error locating key.`)              // Se não tem key, retorna erro
-                rowIndexes.set(requestedKeys, index.getRow() - 1)                   // Adiciona indice no Map
-                return rowIndexes                                                   // Encerra execução
+                let index = this._table.getRange(2, keys_colIdx + 1, lastRow - 1)       // Obtém range de keys
+                    .createTextFinder(requestedKeys).matchEntireCell(true)              // Pesquisa na planilha
+                    .findPrevious()                                                     // Obtém índice da última instância
+                if (index !== null) rowIndexes.set(requestedKeys, index.getRow() - 1)  // Adiciona indice no Map
+                return rowIndexes                                                       // Encerra execução
             }
 
             if (lastRow >= 2) { // Se planilha não está vazia
@@ -296,16 +302,15 @@ class Codex {
                         dateTimeRenderOption: "FORMATTED_STRING"
                     },
                     this._sheetID,
-                ).valueRanges[0].valueRange.values[0]
+                ).valueRanges[0].valueRange.values
 
-                keys_rawValues.forEach((k, i) => {                                                  // Para cada key
+                if (keys_rawValues && keys_rawValues[0]) keys_rawValues[0].forEach((k, i) => {           // Para cada key
                     let trimKey = String(k).trim()                                                      // Limpa key
                     if (k == "" || k == null || k == undefined) return;                                 // Ignora keys vazias
                     if (mode === "FULL" || requestedKeys.has(trimKey)) rowIndexes.set(trimKey, i + 1)   // Armazena keys com índice
                 })
 
                 // Encerra execução
-                if (rowIndexes.size === 0) throw Error(`Error locating keys.`)
                 return rowIndexes
             }
         } catch (e) { throw Error(`Error to get keys: \n\n${e.stack}`) }  // Retorna outros erros
@@ -342,7 +347,7 @@ class Codex {
 
                 // Tenta requerer a API avançada
                 Utilities.sleep(500)    // Força aguardar para evitar erro 429
-                return Sheets.Spreadsheets.Values.batchGetByDataFilter(
+                let response = Sheets.Spreadsheets.Values.batchGetByDataFilter(
                     {
                         dataFilters: [{ gridRange: gridRange }],
                         majorDimension: "ROWS",
@@ -351,6 +356,9 @@ class Codex {
                     },
                     table.getSheetId(),
                 ).valueRanges[0].valueRange.values
+
+                // Garante alguma resposta
+                return response ?? []
             }
             catch (e) {
 
@@ -865,8 +873,8 @@ class Codex {
                     if (mode === 'test') { return value }   // Devolve o valor caso não precise de um clone
 
                     // Clona os objetos
-                    convertedValue = [...value.entries()]                                                           // Clona a primeira camada 
-                    convertedValue = convertedValue.map((([k, v]) => [k, this._typeJStoGS(v, mode, depth + 1)]))    // Clona as posteriores
+                    convertedValue = [...value.entries()]                                                       // Clona a primeira camada 
+                    convertedValue = convertedValue.map(([k, v]) => [k, this._typeJStoGS(v, mode, depth + 1)])  // Clona as posteriores
 
                     // Encerra execução
                     if (mode === 'clone') { return new Map(convertedValue) }
@@ -953,6 +961,7 @@ class Codex {
                     let parsedEntries = entries.map(([k, v]) => [k, this._typeGStoJS(v)])   // Roda recursivamente
                     return Object.fromEntries(parsedEntries)                                // Remonta
                 }
+                break;
 
             // Caso string, desambiguar
             case "string":
@@ -961,7 +970,7 @@ class Codex {
                 if (value === "") return undefined
 
                 // DATA ISO
-                let regex_DateISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}.\d{3}Z$/
+                let regex_DateISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?Z$/
                 if (regex_DateISO.test(value)) try {
                     let date = new Date(value)
                     if (!isNaN(date.getTime())) return date
@@ -980,11 +989,10 @@ class Codex {
                     let [fullmatch, pattern, flags] = value.match(regex_RegexString)
                     return new RegExp(pattern, flags)
                 } catch (e) { }
-
-            // Padrão, retornar valor recebido
-            default: return value
-
         }
+
+        // Fallback, retornar valor recebido
+        return String(value)
     }
 
     /**
@@ -1003,6 +1011,7 @@ class Codex {
 
         // Cria a trap de edições para commits
         let proxyHandlers = {
+
             set: (ogObj, colName, value) => {
 
                 // Impede escrita de valores na coluna de keys.
@@ -1011,6 +1020,15 @@ class Codex {
                 let cleanValue = this._typeJStoGS(value)        // Garante que a informação é compatível
                 this._setKeyAs(key, "modified")                 // Marca o objeto como modificado
                 return Reflect.set(ogObj, colName, cleanValue)  // Edita o objeto
+            },
+
+            deleteProperty: (ogObj, colName) => {
+
+                // Impede escrita de valores na coluna de keys.
+                if (colName === this._keyColumnName) throw Error(`Key values are not deleteable.`)
+
+                this._setKeyAs(key, "modified")                 // Marca o objeto como modificado
+                return Reflect.deleteProperty(ogObj, colName)   // Deleta o valor no objeto
             },
 
             get: (ogObj, colName) => {
@@ -1088,18 +1106,22 @@ class Codex {
     delete(key) {
         try {
 
-            key = String(key).trim()                // Formata key
-            let isDeleteable = this._keys.has(key)   // Verifica se há um dado a ser excluido
+            key = String(key).trim()          // Formata key
+            let status = this._keys.get(key)  // Verifica se há um dado a ser excluido
 
-            // Caso deletável
-            if (isDeleteable) {
-                this._data.delete(key)          // Remove da memória
-                this._setKeyAs(key, "deleted")  // Marca como deletado
+            // Varia comportamento
+            switch (status) {
+
+                // Nada é feito se já está excluído
+                case undefined:
+                case "deleted":
+                    return false;
+
+                default: 
+                    this._data.delete(key)          // Remove da memória
+                    this._setKeyAs(key, "deleted")  // Marca como deletado
+                    return true
             }
-
-            // Retorna se dado está excluído
-            return isDeleteable
-
         } catch (e) {
             // Retorna erro.
             throw Error(`${this._log} ${e.stack}`)
@@ -1125,7 +1147,6 @@ class Codex {
         }
     }
 
-
     /**
      * Retrieves a record by its unique Primary Key.
      * * @param {string|number} key - The unique identifier (ID) of the record.
@@ -1147,6 +1168,7 @@ class Codex {
             let keyLoaded = this._data.has(key)             // Verifica se carregado
             if (!keyLoaded) this._fetchNewData([key])       // Requisita o load do dado
             let requestedData = this._data.get(key)         // Carrega o dado em uma var local
+            if (!requestedData) return undefined            // Se não achar, retorna undefined
             return this._createProxy(requestedData, key)    // Cria proxy do objeto e retorna.
 
         } catch (e) {
@@ -1172,7 +1194,6 @@ class Codex {
             throw Error(`${this._log} ${e.stack}`)
         }
     }
-
 
     /**
      * Returns a iterator that contains all active values in the store. Only avaliable on mode = full
@@ -1244,7 +1265,7 @@ class Codex {
             }
 
             // Fase 2 de validação: tem alguma propriedade inválida?
-            if (!Object.keys(value).every(k => this._options.columns.has(k))) {
+            if (!Object.keys(validValue).every(k => this._options.columns.has(k))) {
                 throw Error(`Some properties does not exist in Sheet or constructor.`)
             }
 
