@@ -158,6 +158,10 @@ class Codex {
          */
         this._proxies = new WeakMap();
 
+        // Vars de metadados para detectar proxies 
+        this._isProxy = Symbol("isCodexProxy")
+        this._target = Symbol("getTarget")
+
         /**
          * Mapa que rastreia o status de sincronização das chaves alteradas na transação atual.
          * Associa a key do registro ao seu estado pendente para o próximo commit.
@@ -742,6 +746,10 @@ class Codex {
 
             case 'object':
 
+                // Caso seja um proxy, busca trabalhar com os dados originais
+                if (value && value[this._isProxy]) value = value[this._target]
+
+
                 // NULL
                 if (value === null) {
                     if (runConversion) { return "" } else { return null };     // Retorna nulo ou string vazia (commit)
@@ -907,6 +915,10 @@ class Codex {
             },
 
             get: (ogObj, colName) => {
+
+                // Comportamento de requisição de metadados
+                if (colName === this._isProxy) return true      // Valida que isso é uma Proxy 
+                if (colName === this._target) return ogObj      // Devolve o objeto original
 
                 // Obtém objeto e alterna comportamento conforme tipo
                 let value = Reflect.get(ogObj, colName)
