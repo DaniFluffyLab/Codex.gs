@@ -159,8 +159,8 @@ class Codex {
         this._proxies = new WeakMap();
 
         // Vars de metadados para detectar proxies 
-        this._isProxy = Symbol("isCodexProxy")
-        this._target = Symbol("getTarget")
+        this._isCdxProxy = Symbol("isCodexProxy")
+        this._cdxProxyTarget = Symbol("getTarget")
 
         /**
          * Mapa que rastreia o status de sincronização das chaves alteradas na transação atual.
@@ -695,21 +695,25 @@ class Codex {
      * do JavaScript (como Map, Set, BigInt e RegExp) em formatos e tamanhos compatíveis com
      * as células da planilha.
      * @param {*} value - O dado a ser processado (Primitivos, Coleções ou Objetos).
-     * @param {boolean} [runConversion=false] - Se verdadeiro, efetivamente converte o dado. 
-     * Se falso, valida o dado para o commit .
+     * @param {'test'|'clone'|'commit'} [mode='test'] - Altera o modo de operação:
+     * - `test`: Apenas valida a compatibilidade e retorna o objeto original.
+     * - `clone`: Útil para objetos, também cria uma cópia do objeto original.
+     * - `commit`: Efetivamente converte os objetos para serem submetidos ao GSheets.
      * @param {number} [depth=0] - Uso interno para recursão.
      * @returns {*} O valor enviado:
-     * - `runConversion = true`: Retorna strings (JSON ou Primitivos) prontas para o Sheets.
-     * - `runConversion = false`: Retorna o mesmo valor enviado.
+     * - `test`: Retorna o objeto original. No caso de CdxProxies, retorna o objeto origem.
+     * - `clone`: Retorna uma cópia do objeto original.
+     * - `commit`: Retorna os valores nos tipos suportados pelo GSheet.
      * * @throws {Error} Se a profundidade de aninhamento exceder 25 níveis.
      * @throws {Error} Se uma string resultante (JSON ou texto) ultrapassar 50.000 caracteres.
      * @throws {Error} Se chaves de um `Map` não forem do tipo `string` ou `number`.
      * @throws {Error} Se o tipo de dado não for suportado pela biblioteca.
      * @private
      */
-    _typeJStoGS(value, runConversion = false, depth = 0) {
+    _typeJStoGS(value, mode = 'test', depth = 0) {
 
-        let convertedValue;
+        // Vars usadas no switch
+        let convertedValue, jsonValue;
 
         // Valida dado baseado no tipo
         switch (typeof value) {
@@ -721,7 +725,7 @@ class Codex {
 
             case 'undefined':
                 // Retorna undefined ou string vazia (commit)
-                if (runConversion) { return "" } else { return undefined };
+                if (mode === 'commit') { return "" } else { return undefined };
 
 
             case 'string':
@@ -738,77 +742,160 @@ class Codex {
                 if (value > maxint || value < minint) {
                     convertedValue = String(value);
                     if (convertedValue.length > 50000) throw Error(`The input contains more than the maximum limit of 50,000 characters in a single cell.`)
-                    if (runConversion) { return convertedValue } else { return value };
+                    if (mode === 'commit') { return convertedValue } else { return value };
                 }
 
                 // Converte para Integer seguramente
-                if (runConversion) { return Number(value) } else { return value };
+                if (mode === 'commit') { return Number(value) } else { return value };
 
             case 'object':
 
+
+
                 // Caso seja um proxy, busca trabalhar com os dados originais
-                if (value && value[this._isProxy]) value = value[this._target]
+                if (value && value[this._isCdxProxy]) value = value[this._cdxProxyTarget]
+
 
 
                 // NULL
                 if (value === null) {
-                    if (runConversion) { return "" } else { return null };     // Retorna nulo ou string vazia (commit)
+                    if (mode === 'commit') { return "" } else { return null };     // Retorna nulo ou string vazia (commit)
                 }
+
+
+
 
                 // DATAS
                 if (value instanceof Date) {
-                    if (runConversion) { return isNaN(value.getTime()) ? "Invalid date" : value }  // Caso commit, limpa data inválida
-                    else { return value }                                                       // Se não, retorna valor     
+                    if (mode === 'commit') { return isNaN(value.getTime()) ? "Invalid date" : value }   // Caso commit, limpa data inválida
+                    if (mode === 'clone') { return new Date(value) }                                    // Caso clone, retorna data clonada
+                    if (mode === 'test') { return value }                                               // Caso teste, retorna valor     
                 }
+
+
+
 
                 // REGEX
                 if (value instanceof RegExp) {
                     convertedValue = value.toString()
                     if (convertedValue.length > 50000) throw Error(`The input contains more than the maximum limit of 50,000 characters in a single cell.`)
-                    if (runConversion) { return convertedValue } else { return value };
+                    if (mode === 'commit') { return convertedValue }    // Caso commit, envia o regex convertido
+                    if (mode === 'clone') { return new RegExp(value) }  // Caso clone, retorna novo regex
+                    if (mode === 'test') { return value }               // Caso teste, retorna valor 
                 }
 
-                // ARRAY ou SET
-                if (value instanceof Array || value instanceof Set) {
 
-                    convertedValue = [...value]                                                                     // Cria cópia de segurança
-                    if (depth < 25) convertedValue = convertedValue.map(v => this._typeJStoGS(v, true, depth + 1))  // Limpa até 25 camadas
-                    if (depth == 25) throw Error(`The inputed array contains more than 25 levels of depth.`)        // Para de converter acima de 25 camadas
-                    if (depth != 0) return convertedValue                                                           // Caso em recursão, retorna valor convertido
+
+
+
+                // ARRAY ou SET no modo commit
+                if ((value instanceof Set || value instanceof Array) && mode === 'commit') {
+
+                    convertedValue = [...value]                                                                         // Cria cópia de segurança
+                    if (depth < 25) convertedValue = convertedValue.map(v => this._typeJStoGS(v, 'commit', depth + 1))  // Limpa até 25 camadas
+                    if (depth == 25) throw Error(`The inputed object contains more than 25 levels of depth.`)           // Para de converter acima de 25 camadas
+                    if (depth != 0) return convertedValue                                                               // Caso em recursão, retorna valor convertido
 
                     // Valida tamanho da string
-                    convertedValue = JSON.stringify(convertedValue)
-                    if (convertedValue.length > 50000) throw Error(`The input contains more than the maximum limit of 50,000 characters in a single cell.`)
+                    jsonValue = JSON.stringify(convertedValue)
+                    if (jsonValue.length > 50000) throw Error(`The input contains more than the maximum limit of 50,000 characters in a single cell.`)
 
-                    // Encerra execução
-                    if (runConversion) { return convertedValue } else { return value };
+                    // Encerra execução retornando JSON
+                    if (mode === 'commit') { return jsonValue }
                 }
 
-                // OBJETO LITERAL OU MAP
-                if (Object.prototype.toString.call(value) === '[object Object]' || value instanceof Map) {
+
+                // ARRAY ou SET sem ser commit
+                if ((value instanceof Set || value instanceof Array) && mode !== 'commit') {
+
+                    this._typeJStoGS(value, 'commit')       // Valida o objeto
+                    if (mode === 'test') { return value }   // Devolve o valor caso não precise de um clone
+
+                    // Clona os objetos
+                    convertedValue = [...value]                                                         // Clona a primeira camada 
+                    convertedValue = convertedValue.map((v => this._typeJStoGS(v, mode,  depth + 1)))   // Clona as posteriores
+
+                    // Encerra execução
+                    if (mode === 'clone' && value instanceof Set) { return new Set(convertedValue) }
+                    if (mode === 'clone' && value instanceof Array) { return convertedValue }
+                }
+
+
+
+
+
+                // MAP no modo commit
+                if (value instanceof Map && mode === 'commit') {
 
                     // Obtém o encadeamento chave / valor
-                    if (value instanceof Map) {
-                        convertedValue = [...value.entries()]
-                        // Executa uma validação simples nas keys
-                        for (let [key] of convertedValue) {
-                            if (typeof key !== 'number' && typeof key !== 'string') throw Error(`Maps with not-string or not-number keys are not supported.`)
-                        }
+                    convertedValue = [...value.entries()]
+                    for (let [key] of convertedValue) {
+                        if (typeof key !== 'number' && typeof key !== 'string') throw Error(`Maps with not-string or not-number keys are not supported.`)
                     }
-                    else convertedValue = Object.entries(value)
 
-                    if (depth < 25) convertedValue = convertedValue.map(([k, v]) => [k, this._typeJStoGS(v, true, depth + 1)])  // Limpa até 25 camadas
-                    if (depth == 25) throw Error(`The inputed object contains more than 25 levels of depth.`)                   // Para de converter acima de 25 camadas
-                    if (depth != 0) return Object.fromEntries(convertedValue)                                                                       // Caso em recursão, retorna valor convertido
+                    if (depth < 25) convertedValue = convertedValue.map(([k, v]) => [k, this._typeJStoGS(v, 'commit', depth + 1)])  // Limpa até 25 camadas
+                    if (depth == 25) throw Error(`The inputed object contains more than 25 levels of depth.`)                       // Para de converter acima de 25 camadas
+                    if (depth != 0) return Object.fromEntries(convertedValue)                                                       // Caso em recursão, retorna valor convertido
 
                     // Valida tamanho da string
-                    convertedValue = JSON.stringify(Object.fromEntries(convertedValue))
-                    if (convertedValue.length > 50000) throw Error(`The input contains more than the maximum limit of 50,000 characters in a single cell.`)
+                    jsonValue = JSON.stringify(Object.fromEntries(convertedValue))
+                    if (jsonValue.length > 50000) throw Error(`The input contains more than the maximum limit of 50,000 characters in a single cell.`)
 
                     // Encerra execução
-                    if (runConversion) { return convertedValue } else { return value };
-
+                    return jsonValue;
                 }
+
+
+                // MAP sem ser commit
+                if (value instanceof Map && mode !== 'commit') {
+
+                    this._typeJStoGS(value, 'commit')       // Valida o objeto
+                    if (mode === 'test') { return value }   // Devolve o valor caso não precise de um clone
+
+                    // Clona os objetos
+                    convertedValue = [...value.entries()]                                                           // Clona a primeira camada 
+                    convertedValue = convertedValue.map((([k, v]) => [k, this._typeJStoGS(v, mode, depth + 1)]))    // Clona as posteriores
+
+                    // Encerra execução
+                    if (mode === 'clone') { return new Map(convertedValue) }
+                }
+
+
+
+
+                // OBJETO LITERAL no modo commit
+                if (Object.prototype.toString.call(value) === '[object Object]' && mode === 'commit') {
+
+                    // Obtém o encadeamento chave / valor
+                    convertedValue = Object.entries(value)
+
+                    if (depth < 25) convertedValue = convertedValue.map(([k, v]) => [k, this._typeJStoGS(v, 'commit', depth + 1)])  // Limpa até 25 camadas
+                    if (depth == 25) throw Error(`The inputed object contains more than 25 levels of depth.`)                       // Para de converter acima de 25 camadas
+                    if (depth != 0) return Object.fromEntries(convertedValue)                                                       // Caso em recursão, retorna valor convertido
+                    convertedValue = Object.fromEntries(convertedValue)                                                             // Fora da recursão, reconverte em objeto    
+
+                    // Valida tamanho da string
+                    jsonValue = JSON.stringify(convertedValue)
+                    if (jsonValue.length > 50000) throw Error(`The input contains more than the maximum limit of 50,000 characters in a single cell.`)
+
+                    // Encerra execução
+                    if (mode === 'commit') { return jsonValue }     // Caso commit, retorna json
+                }
+
+                // OBJETO LITERAL sem ser commit
+                if (Object.prototype.toString.call(value) === '[object Object]' && mode !== 'commit') {
+
+                    this._typeJStoGS(value, 'commit')       // Valida o objeto
+                    if (mode === 'test') { return value }   // Devolve o valor caso não precise de um clone
+
+                    // Clona os objetos
+                    convertedValue = Object.entries(value)                                                          // Clona a primeira camada 
+                    convertedValue = convertedValue.map((([k, v]) => [k, this._typeJStoGS(v, mode, depth + 1)]))    // Clona as posteriores
+
+                    // Encerra execução
+                    if (mode === 'clone') { return Object.fromEntries(convertedValue) }
+                }
+
 
             default:
                 throw Error(`Value ${value} not supported.`)
@@ -917,8 +1004,8 @@ class Codex {
             get: (ogObj, colName) => {
 
                 // Comportamento de requisição de metadados
-                if (colName === this._isProxy) return true      // Valida que isso é uma Proxy 
-                if (colName === this._target) return ogObj      // Devolve o objeto original
+                if (colName === this._isCdxProxy) return true       // Valida que isso é uma Proxy 
+                if (colName === this._cdxProxyTarget) return ogObj  // Devolve o objeto original
 
                 // Obtém objeto e alterna comportamento conforme tipo
                 let value = Reflect.get(ogObj, colName)
@@ -1120,6 +1207,25 @@ class Codex {
             throw Error(`${this._log} ${e.stack}`)
         }
     }
+
+/*     set(key, value) {
+        try {
+
+            // Fase 1 de validação: é um objeto válido?
+            let validValue = this._typeJStoGS(value)
+            if (Object.prototype.toString.call(validValue) === '[object Object]') throw Error(`Not an literal object.`)
+
+            // Fase 2 de validação: tem alguma propriedade inválida?
+            let validColumns = new Set(this._options.columns)
+            if (!Object.keys(value).every()) === '[object Object]') throw Error(`Not an literal object.`)
+
+
+
+        } catch (e) {
+            // Retorna erro.
+            throw Error(`${this._log} ${e.stack}`)
+        }
+    } */
 }
 
 
