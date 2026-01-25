@@ -132,13 +132,12 @@ class Codex {
          * @private
          */
         this._options = {
-            mode: "minimal",
-            columns: [],
-            enableTypeInference: true,
-            ...options
+            mode: options.mode ?? "minimal",
+            columns: new Set(options.columns ?? []),
+            enableTypeInference: options.enableTypeInference ?? true,
         };
         if (this._options.mode !== 'minimal' && this._options.mode !== 'full') throw Error(`${this._log} Invalid mode: ${this._options.mode}`)
-        for (let c of this._options.columns) if (typeof c !== 'string') throw Error(`${this._log} Column "${c}" is not a string.`)
+        for (let c of this._options.columns) { if (typeof c !== 'string') throw Error(`${this._log} Column "${c}" is not a string.`) }
 
 
 
@@ -218,20 +217,22 @@ class Codex {
             .getValues()[0]                                             // Obtém dados
         columnIndexes = new Map(columnArray.map((v, i) => [v, i]))      // Insere dados dos índices no Map
 
-        // Caso hajam parâmetros sobre quais colunas obter
-        if (this._options.columns.length != 0) {
-            let hasInvalid = this._options.columns.some(item => !columnIndexes.has(item));          // Verifica a validade das colunas
-            if (hasInvalid) throw Error(`One or more requested columns do not exist.`);             // Lança erro se inválido 
-            let filteredColumnIndexes = new Map()                                                   // Cria Map para colunas filtradas
-            filteredColumnIndexes.set(this._keyColumnName, columnIndexes.get(this._keyColumnName))  // Garante coluna de key
-            for (let columnName of this._options.columns) {                                         // Para cada coluna requisitada:
-                filteredColumnIndexes.set(columnName, columnIndexes.get(columnName))                    // Armazena seu valor no Map de filtradas
-            }
-            columnIndexes = filteredColumnIndexes                                                   // Atualiza var de retorno
+        // Valida a existência de uma coluna de keys
+        if (!columnIndexes.has(this._keyColumnName)) { throw Error(`keyColumnName do not exist in Sheet.`); }
+
+        // Caso não hajam parâmetros sobre quais colunas obter, alimentar com nome de todas as colunas
+        if (this._options.columns.size === 0) { this._options.columns = new Set(columnIndexes.keys()) }
+
+        let filteredColumnIndexes = new Map()                                                   // Cria Map para colunas filtradas
+        filteredColumnIndexes.set(this._keyColumnName, columnIndexes.get(this._keyColumnName))  // Garante coluna de key
+        for (let columnName of this._options.columns) {                                         // Para cada coluna requisitada:
+            let hasInvalid = !columnIndexes.has(columnName)                                         // Verifica a validade da colunas
+            if (hasInvalid) { throw Error(`One or more requested columns do not exist.`); }         // Lança erro se inválido 
+            filteredColumnIndexes.set(columnName, columnIndexes.get(columnName))                    // Armazena seu valor no Map de filtradas
         }
 
         // Retorna map de índices
-        return columnIndexes
+        return filteredColumnIndexes
     }
 
     /**
@@ -661,31 +662,42 @@ class Codex {
         // Obtém estado atual da chave
         let actualState = this._keys.get(key)
 
-        // Caso não tenha sido modificado, adiciona estado e encerra
-        if (actualState === "unmodified") {
-            this._keys.set(key, newState)
-            return undefined
-        }
-
         // Caso estado anterior seja igual ao novo, encerra
         if (actualState === newState) return;
 
         // Age conforme o estado atual
         switch (actualState) {
 
+            case undefined:
+                if (newState == "new") this._keys.set(key, "new");
+                if (newState == "modified") this._keys.set(key, "new");
+                // Recebeu "deleted" => nada muda
+                break;
+
             case "new":
+                // Recebeu "new" => nada muda
+                // Recebeu "modified" => nada muda
                 if (newState == "deleted") this._keys.delete(key);
-                // if (newState == "modified") deve manter o estado como "new" 
+                break;
+
+            case "unmodified":
+                if (newState == "new") this._keys.set(key, "modified");
+                if (newState == "modified") this._keys.set(key, "modified");
+                if (newState == "deleted") this._keys.set(key, "deleted");
                 break;
 
             case "modified":
-                // if (newState == "new") não é uma operação válida
+                // Recebeu "new" => nada muda
+                // Recebeu "modified" => nada muda
                 if (newState == "deleted") this._keys.set(key, "deleted");
                 break;
+
             case "deleted":
-                // Adicionar uma chave deletada a reativa modificando o valor.
                 if (newState == "new") this._keys.set(key, "modified");
-            // if (newState == "modified") não reabilita a chave. 
+                // Recebeu "modified" => nada muda
+                // Recebeu "deleted" => nada muda
+                break;
+
         }
     }
 
@@ -813,7 +825,7 @@ class Codex {
 
                     // Clona os objetos
                     convertedValue = [...value]                                                         // Clona a primeira camada 
-                    convertedValue = convertedValue.map((v => this._typeJStoGS(v, mode,  depth + 1)))   // Clona as posteriores
+                    convertedValue = convertedValue.map((v => this._typeJStoGS(v, mode, depth + 1)))   // Clona as posteriores
 
                     // Encerra execução
                     if (mode === 'clone' && value instanceof Set) { return new Set(convertedValue) }
@@ -997,7 +1009,7 @@ class Codex {
                 if (colName === this._keyColumnName) throw Error(`Key values are not writable.`)
 
                 let cleanValue = this._typeJStoGS(value)        // Garante que a informação é compatível
-                this._keys.set(key, "modified")                 // Marca o objeto como modificado
+                this._setKeyAs(key, "modified")                 // Marca o objeto como modificado
                 return Reflect.set(ogObj, colName, cleanValue)  // Edita o objeto
             },
 
@@ -1022,7 +1034,7 @@ class Codex {
                     // Funções não usam proxies e precisam da referecia original no this
                     case "function":
                         return (...args) => {
-                            this._keys.set(key, "modified")
+                            this._setKeyAs(key, "modified")
                             return value.apply(ogObj, args)
                         }
 
@@ -1208,24 +1220,49 @@ class Codex {
         }
     }
 
-/*     set(key, value) {
+    /**
+     * Adds or updates a record in the local memory, staging it for the next transaction commit.
+     * @param {string|number} key - The Primary Key for the record.
+     * @param {Object} value - The literal object containing the data to be stored.
+     * @returns {Codex} The Codex instance (for method chaining).
+     * @throws {Error} If `key` is not a string or number.
+     * @throws {Error} If `value` is not a literal object.
+     * @throws {Error} If `value` contains properties not defined in the Codex schema/columns.
+     * @throws {Error} If the `key` property inside `value` differs from the `key` argument.
+     */
+    set(key, value) {
         try {
 
+            // Fase 0 de validação: keys
+            if (typeof key !== 'string' && typeof key !== 'number') { throw Error(`key must be a string or number`) }
+            key = String(key).trim()
+
             // Fase 1 de validação: é um objeto válido?
-            let validValue = this._typeJStoGS(value)
-            if (Object.prototype.toString.call(validValue) === '[object Object]') throw Error(`Not an literal object.`)
+            let validValue = this._typeJStoGS(value, 'clone')
+            if (Object.prototype.toString.call(validValue) !== '[object Object]') {
+                throw Error(`Not an literal object.`)
+            }
 
             // Fase 2 de validação: tem alguma propriedade inválida?
-            let validColumns = new Set(this._options.columns)
-            if (!Object.keys(value).every()) === '[object Object]') throw Error(`Not an literal object.`)
+            if (!Object.keys(value).every(k => this._options.columns.has(k))) {
+                throw Error(`Some properties does not exist in Sheet or constructor.`)
+            }
 
+            // Fase 3 de validação: keys no objeto
+            let objKey = validValue[this._keyColumnName]
+            if (objKey === undefined) { validValue[this._keyColumnName] = key }
+            if (validValue[this._keyColumnName] !== key) { throw Error(`Key property can't be different to key argument`) }
 
+            // Insere na array
+            this._data.set(key, validValue)
+            this._setKeyAs(key, "new")
+            return this
 
         } catch (e) {
             // Retorna erro.
             throw Error(`${this._log} ${e.stack}`)
         }
-    } */
+    }
 }
 
 
