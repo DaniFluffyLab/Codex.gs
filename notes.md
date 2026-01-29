@@ -37,6 +37,87 @@ Objetos como `Date` são alterados por métodos (ex: `.setFullYear()`) e não po
 
 
 
+---
+
+# 🔍 Codex Method: `.search()` (Hybrid Implementation)
+
+## 📋 Descrição Geral
+
+O método `.search()` transforma o Codex de um simples armazenamento Chave-Valor em um motor de busca consultável. Ele utiliza uma estratégia **Híbrida de Duas Camadas**:
+
+1. **Broad Filter (Camada Planilha):** Triagem de alta performance usando a busca nativa do Google para reduzir o conjunto de dados.
+2. **Fine Filter (Camada Memória):** Refinamento lógico rigoroso para garantir a integridade dos resultados (AND lógico) e suporte a tipos complexos.
+
+---
+
+## 🛠 Especificação da API
+
+### Assinatura
+
+`*search(mode, search_for)`
+
+### Parâmetros
+
+* **`mode`**: `fullstring` | `partialstring` | `regex`
+* **`search_for`**: `{ [colName: string]: any }` (Ex: `{ nome: "Dani", codServ: 123 }`)
+
+### Retorno
+
+* **`IterableIterator<[string, object]>`**: Um Generator que emite pares `[key, Proxy]`, idêntico ao `.entries()`.
+
+---
+
+## ⚙️ Fluxo de Execução (Modo Minimal / Lazy)
+
+### 1. Triagem de Cardinalidade (Otimização)
+
+Em vez de iterar sobre todos os critérios, o sistema identifica o **caminho de menor resistência**:
+
+1. Para cada propriedade em `search_for`:
+* Configura um `Sheet.createTextFinder()` restrito à coluna específica (`withRange`).
+* Configura o finder conforme o `mode` (Regex, Case Sensitive, etc).
+* Executa `.findAll()` e armazena o array de `Ranges`.
+
+
+2. **Short-Circuit:** Se qualquer critério retornar 0 resultados, o método encerra imediatamente (busca AND com zero ocorrências é sempre vazia).
+3. **Vencedor:** Identifica qual critério retornou o **menor** número de `Ranges`.
+
+### 2. Sincronização de Cache (`Hydration`)
+
+1. Itera apenas sobre os resultados do "Vencedor".
+2. Extrai as Chaves Primárias (`PKs`) dessas linhas.
+3. Dispara o método interno `_fetchNewData(keysToLoad)` para garantir que esses registros (e apenas eles) estejam na memória RAM.
+
+---
+
+## ⚙️ Fluxo de Execução (Pós-Hydration / Modo Full)
+
+### 3. Filtro Fino (AND Lógico)
+
+Com os candidatos carregados na memória, o sistema executa a validação final:
+
+1. Para cada registro candidato na memória:
+* Valida se **todos** os critérios de `search_for` são atendidos (Lógica AND).
+* Aplica a comparação baseada no `mode`:
+* `fullstring`: Igualdade estrita (após conversão de tipo).
+* `partialstring`: `.includes()` ou similar.
+* `regex`: Teste de expressão regular contra o valor (ou stringify de objetos/arrays).
+
+
+
+
+2. **Yield:** Se aprovado, emite o par `[key, _createProxy(data, key)]`.
+
+---
+
+## 💡 Observações Técnicas Importantes
+
+> * **Performance:** A busca por cardinalidade evita o estouro de cota da API do Google ao não carregar linhas desnecessárias para a RAM.
+> * **Falsos Positivos:** O `TextFinder` pode encontrar termos dentro de strings JSON (ex: encontrar `"SP"` dentro de uma URL). O "Filtro Fino" em memória é o que garante que o resultado seja 100% preciso.
+> * **Reatividade:** Como os resultados são emitidos via `_createProxy`, o usuário pode editar os resultados da busca diretamente, e as mudanças serão capturadas para o próximo `commit()`.
+> 
+> 
+
 
 
 
