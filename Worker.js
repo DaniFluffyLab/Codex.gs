@@ -1117,7 +1117,7 @@ class Codex {
                 case "deleted":
                     return false;
 
-                default: 
+                default:
                     this._data.delete(key)          // Remove da memória
                     this._setKeyAs(key, "deleted")  // Marca como deletado
                     return true
@@ -1241,6 +1241,130 @@ class Codex {
         }
     }
 
+    *search(mode, search_for) {
+
+        // ETAPA DE VALIDAÇÃO
+
+        // Valida o modo de operação
+        if (mode !== "fullstring" && mode !== "partialstring" && mode !== "regex") {
+            throw Error(`Invalid mode: ${mode}`)
+        }
+
+        // Valida se search_for é um objeto
+        if (Object.prototype.toString.call(search_for) !== '[object Object]') {
+            throw Error(`search_for is not an literal object.`)
+        }
+
+        // Valida valores com base no tipo
+        for (let value of Object.values(search_for)) switch (mode) {
+
+            // Caso string
+            case 'fullstring':
+            case 'partialstring':
+
+                // Valida se é msm uma string
+                if (typeof value !== 'string') throw Error(`${value} is not an string.`)
+                break;
+
+            
+            // Caso Regex
+            case 'regex':
+
+                // Valida se é msm um Regex
+                if (!(value instanceof RegExp)) throw Error(`${value} is not an regex.`)
+                
+                // Testa a compatibilidade com GSheets
+                try { this._table.getRange(1, 1).createTextFinder(value.source).useRegularExpression(true).findNext() }
+                catch (e) { throw Error(`${value.source} is not an regex compatible with Google Sheets.`) }
+
+                break;
+        }
+
+        // Verifica se tem alguma propriedade inválida
+        if (!Object.keys(search_for).every(k => this._options.columns.has(k))) {
+            throw Error(`Some properties does not exist in Sheet or constructor.`)
+        }
+
+
+
+        // ETAPA DE CACHING (apenas minimal)
+
+        if (this._options.mode === 'minimal') {
+
+            let lastRow = this._table.getLastRow();     // Obtém última linha
+            let columnRanges = new Map()                // Obtém índices das colunas
+            let queries = []                            // Prepara para buscar na planilha
+            let wip = undefined                         // Prepara var para trabalhos em loop
+
+            // Converte índice de colunas em ranges
+            for (let [c, i] of this._getColumnIndexes()) columnRanges.set(c, `R2C${i + 1}:R${lastRow}C${i + 1}`)
+
+            // Para cada filtro solicitado
+            for (let [columnName, filter] of Object.entries(search_for)) switch (mode) {
+
+                case 'partialstring':
+
+                    // Efetua a busca
+                    wip = this._table
+                        .getRange(columnRanges.get(columnName))
+                        .createTextFinder(filter)
+                        .useRegularExpression(false)
+                        .ignoreDiacritics(true)
+                        .matchCase(false)
+                        .matchEntireCell(false)
+                        .findAll()
+
+                    // Caso finder vazio, encerrar execução
+                    if (wip.length == 0) return
+
+                    // Armazenar finder no array de queries
+                    queries.push(wip)
+                    break;
+
+
+                case 'fullstring':
+
+                    // Efetua a busca
+                    wip = this._table
+                        .getRange(columnRanges.get(columnName))
+                        .createTextFinder(filter)
+                        .useRegularExpression(false)
+                        .ignoreDiacritics(false)
+                        .matchCase(true)
+                        .matchEntireCell(true)
+                        .findAll()
+
+                    // Caso finder vazio, encerrar execução
+                    if (wip.length == 0) return
+
+                    // Armazenar finder no array de queries
+                    queries.push(wip)
+                    break;
+
+                case 'regex':
+
+                    // Efetua a busca
+                    wip = this._table
+                        .getRange(columnRanges.get(columnName))
+                        .createTextFinder(filter.source)
+                        .useRegularExpression(true)
+                        .matchCase(!filter.ignoreCase)
+                        .findAll()
+
+                    // Caso finder vazio, encerrar execução
+                    if (wip.length == 0) return
+
+                    // Armazenar finder no array de queries
+                    queries.push(wip)
+                    break;
+            }
+
+
+            // PAREI AQUI
+        }
+    }
+
+
     /**
      * Adds or updates a record in the local memory, staging it for the next transaction commit.
      * @param {string|number} key - The Primary Key for the record.
@@ -1284,6 +1408,7 @@ class Codex {
             throw Error(`${this._log} ${e.stack}`)
         }
     }
+
 }
 
 
