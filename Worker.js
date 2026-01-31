@@ -1112,6 +1112,38 @@ class Codex {
         return newProxy
     }
 
+    /**
+     * Cria um backup preventivo da planilha no Google Drive na pasta Codex Backups, 
+     * inserindo metadados técnicos na descrição do arquivo de backup.
+     * @private
+     * @throws {Error} Se o script não tiver permissões de acesso ao Drive ou se a cota de armazenamento for excedida.
+     */
+    _createBackup() {
+        try {
+            // Obtém esse arquivo via DriveApp
+            let thisFile = DriveApp.getFileById(this._sheetID)
+            let thisFolder = thisFile.getParents().next()
+            let timeZone = Session.getScriptTimeZone()
+            let now = Utilities.formatDate(new Date(), timeZone, "yyyy/MM/dd HH:mm:ss")
+
+            // Obtém pasta de backup
+            let bkpFolderIt = thisFolder.getFoldersByName("Codex Backups")
+            let bkpFolder = bkpFolderIt.hasNext() ? bkpFolderIt.next() : thisFolder.createFolder("Codex Backups")
+            let bkpName = `[Codex Bkp ${now} ${timeZone}] ${thisFile.getName()}`
+
+            // Cria backup
+            let bkpFile = thisFile.makeCopy(bkpName, bkpFolder)
+            bkpFile.setDescription(
+                "[CODEX BACKUP]\n" +
+                `Date/Time: ${now} ${timeZone}` +
+                `Original file: https://drive.google.com/open?id=${this._sheetID}\n` +
+                `Table edited: ${this._tableName}`
+            )
+        } catch (e) {
+            throw Error(`Backup failed. ${e.stack}`)
+        }
+    }
+
 
 
     // MÉTODOS PÚBLICOS
@@ -1313,223 +1345,230 @@ class Codex {
      * for (const lead of db.search("regex", { Email: emailPattern })) {
      * // ...
      * }
-     */    
+     */
     *search(mode, search_for) {
+        try {
 
-        // HELPER
-        let match = (value, condition, mode) => {
+            // HELPER
+            let match = (value, condition, mode) => {
 
-            // Caso seja um proxy, busca trabalhar com os dados originais
-            if (value && value[this._isCdxProxy]) value = value[this._cdxProxyTarget]
+                // Caso seja um proxy, busca trabalhar com os dados originais
+                if (value && value[this._isCdxProxy]) value = value[this._cdxProxyTarget]
 
-            // DATAS (sem suporte)
-            if (value instanceof Date) return false
+                // DATAS (sem suporte)
+                if (value instanceof Date) return false
 
-            // REGEX (sem suporte)
-            if (value instanceof RegExp) return false
+                // REGEX (sem suporte)
+                if (value instanceof RegExp) return false
 
-            // ARRAY, SET, MAP (testar)
-            if (value instanceof Set || value instanceof Array || value instanceof Map) {
+                // ARRAY, SET, MAP (testar)
+                if (value instanceof Set || value instanceof Array || value instanceof Map) {
 
-                for (let v of value) {                              // Para cada valor
-                    if (match(v, condition, mode)) return true;     // Se valor true, encerrar com true
+                    for (let v of value) {                              // Para cada valor
+                        if (match(v, condition, mode)) return true;     // Se valor true, encerrar com true
+                    }
+                    return false;                                       // Se nada for true, encerrar com false
                 }
-                return false;                                       // Se nada for true, encerrar com false
-            }
 
-            // OBJETO LITERAL (testar)
-            if (Object.prototype.toString.call(value) === '[object Object]') {
+                // OBJETO LITERAL (testar)
+                if (Object.prototype.toString.call(value) === '[object Object]') {
 
-                for (let v of Object.entries(value)) {              // Para cada valor
-                    if (match(v, condition, mode)) return true;     // Se valor true, encerrar com true
+                    for (let v of Object.entries(value)) {              // Para cada valor
+                        if (match(v, condition, mode)) return true;     // Se valor true, encerrar com true
+                    }
+                    return false;                                       // Se nada for true, encerrar com false
                 }
-                return false;                                       // Se nada for true, encerrar com false
+
+                // Converte para texto
+                let convertedValue = String(value)
+
+                // Executa comparação
+                switch (mode) {
+                    case 'fullstring': return condition === convertedValue
+                    case 'partialstring': return convertedValue.toLowerCase().includes(condition.toLowerCase())
+                    case 'regex': return condition.test(convertedValue)
+                }
             }
 
-            // Converte para texto
-            let convertedValue = String(value)
 
-            // Executa comparação
-            switch (mode) {
-                case 'fullstring': return condition === convertedValue
-                case 'partialstring': return convertedValue.toLowerCase().includes(condition.toLowerCase())
-                case 'regex': return condition.test(convertedValue)
+
+            // ETAPA DE VALIDAÇÃO
+
+            // Valida o modo de operação
+            if (mode !== "fullstring" && mode !== "partialstring" && mode !== "regex") {
+                throw Error(`Invalid mode: ${mode}`)
             }
-        }
 
+            // Valida se search_for é um objeto
+            if (Object.prototype.toString.call(search_for) !== '[object Object]') {
+                throw Error(`search_for is not an literal object.`)
+            }
 
+            // Converte para Map, se válido
+            search_for = new Map(Object.entries(search_for))
 
-        // ETAPA DE VALIDAÇÃO
+            // Verifica se search_for é vazio
+            if (search_for.size === 0) {
+                throw Error(`search_for can't be empty.`)
+            }
 
-        // Valida o modo de operação
-        if (mode !== "fullstring" && mode !== "partialstring" && mode !== "regex") {
-            throw Error(`Invalid mode: ${mode}`)
-        }
+            // Valida valores com base no tipo
+            for (let value of search_for.values()) switch (mode) {
 
-        // Valida se search_for é um objeto
-        if (Object.prototype.toString.call(search_for) !== '[object Object]') {
-            throw Error(`search_for is not an literal object.`)
-        }
-
-        // Converte para Map, se válido
-        search_for = new Map(Object.entries(search_for))
-
-        // Verifica se search_for é vazio
-        if (search_for.size === 0) {
-            throw Error(`search_for can't be empty.`)
-        }
-
-        // Valida valores com base no tipo
-        for (let value of search_for.values()) switch (mode) {
-
-            // Caso string
-            case 'fullstring':
-            case 'partialstring':
-
-                // Valida se é msm uma string
-                if (typeof value !== 'string') throw Error(`${value} is not an string.`)
-                break;
-
-
-            // Caso Regex
-            case 'regex':
-
-                // Valida se é msm um Regex
-                if (!(value instanceof RegExp)) throw Error(`${value} is not an regex.`)
-
-                // Testa a compatibilidade com GSheets
-                try { this._table.getRange(1, 1).createTextFinder(value.source).useRegularExpression(true).findNext() }
-                catch (e) { throw Error(`${value.source} is not an regex compatible with Google Sheets.`) }
-
-                break;
-        }
-
-        // Verifica se tem alguma propriedade inválida
-        if (![...search_for.keys()].every(k => this._options.columns.has(k))) {
-            throw Error(`Some properties does not exist in Sheet or constructor.`)
-        }
-
-
-
-        // ETAPA DE CACHING (apenas minimal)
-
-        if (this._options.mode === 'minimal') {
-
-            let lastRow = this._table.getLastRow();         // Obtém última linha
-            if (lastRow < 2) return;                        // Para execução se não tem linhas
-
-            let columnIndexes = this._getColumnIndexes()    // Obtém índices das colunas
-            let columnRanges = new Map()                    // Prepara para receber ranges das colunas
-            let queries = []                                // Prepara para buscar na planilha
-            let wip = undefined                             // Prepara var para trabalhos em loop
-
-            // Converte índice de colunas em ranges
-            for (let [c, i] of columnIndexes) columnRanges.set(c, `R2C${i + 1}:R${lastRow}C${i + 1}`)
-
-            // Para cada filtro solicitado
-            for (let [columnName, filter] of search_for) switch (mode) {
-
+                // Caso string
+                case 'fullstring':
                 case 'partialstring':
 
-                    // Efetua a busca
-                    wip = this._table
-                        .getRange(columnRanges.get(columnName))
-                        .createTextFinder(filter)
-                        .useRegularExpression(false)
-                        .ignoreDiacritics(true)
-                        .matchCase(false)
-                        .matchEntireCell(false)
-                        .findAll()
-
-                    // Caso finder vazio, encerrar execução
-                    if (wip.length == 0) return
-
-                    // Armazenar finder no array de queries
-                    queries.push(wip)
+                    // Valida se é msm uma string
+                    if (typeof value !== 'string') throw Error(`${value} is not an string.`)
                     break;
 
 
-                case 'fullstring':
-
-                    // Efetua a busca
-                    wip = this._table
-                        .getRange(columnRanges.get(columnName))
-                        .createTextFinder(filter)
-                        .useRegularExpression(false)
-                        .ignoreDiacritics(false)
-                        .matchCase(true)
-                        .matchEntireCell(true)
-                        .findAll()
-
-                    // Caso finder vazio, encerrar execução
-                    if (wip.length == 0) return
-
-                    // Armazenar finder no array de queries
-                    queries.push(wip)
-                    break;
-
+                // Caso Regex
                 case 'regex':
 
-                    // Efetua a busca
-                    wip = this._table
-                        .getRange(columnRanges.get(columnName))
-                        .createTextFinder(filter.source)
-                        .useRegularExpression(true)
-                        .matchCase(!filter.ignoreCase)
-                        .findAll()
+                    // Valida se é msm um Regex
+                    if (!(value instanceof RegExp)) throw Error(`${value} is not an regex.`)
 
-                    // Caso finder vazio, encerrar execução
-                    if (wip.length == 0) return
+                    // Testa a compatibilidade com GSheets
+                    try { this._table.getRange(1, 1).createTextFinder(value.source).useRegularExpression(true).findNext() }
+                    catch (e) { throw Error(`${value.source} is not an regex compatible with Google Sheets.`) }
 
-                    // Armazenar finder no array de queries
-                    queries.push(wip)
                     break;
             }
 
-            // Obtém o menor query
-            let smallQuery = queries.reduce((small, actual) => {
-                return (actual.length < small.length) ? actual : small
-            })
-
-            // Limpa var de queries para receber índices
-            queries = []
-
-            // Armazena todos os índices
-            for (let row of smallQuery) queries.push(row.getRow() - 1)
-
-            // Requisita esses dados na memória
-            this._fetchNewData(queries, columnIndexes)
-        }
-
-
-
-
-        // ETAPA DE ITERAÇÃO
-
-        // Para cada valor
-        for (let [key, value] of this._data) {
-
-            // Se key deletada, pular
-            if (this._keys.get(key) === 'deleted') continue
-
-            // Cria var de teste
-            let filterPasses = true
-
-            // Para cada filtro solicitado
-            for (let [colName, condition] of search_for) {
-
-                // Executa um AND com o dado
-                filterPasses = match(value[colName], condition, mode)
-
-                // Se o filtro nõo passar, parar imediatamente
-                if (!filterPasses) break; 
+            // Verifica se tem alguma propriedade inválida
+            if (![...search_for.keys()].every(k => this._options.columns.has(k))) {
+                throw Error(`Some properties does not exist in Sheet or constructor.`)
             }
 
-            // Se filtro não passou, pular
-            if (!filterPasses) continue
 
-            // Devolve resultado ao iterador
-            yield this.get(key)
+
+            // ETAPA DE CACHING (apenas minimal)
+
+            if (this._options.mode === 'minimal') {
+
+                let lastRow = this._table.getLastRow();         // Obtém última linha
+                if (lastRow < 2) return;                        // Para execução se não tem linhas
+
+                let columnIndexes = this._getColumnIndexes()    // Obtém índices das colunas
+                let columnRanges = new Map()                    // Prepara para receber ranges das colunas
+                let queries = []                                // Prepara para buscar na planilha
+                let wip = undefined                             // Prepara var para trabalhos em loop
+
+                // Converte índice de colunas em ranges
+                for (let [c, i] of columnIndexes) columnRanges.set(c, `R2C${i + 1}:R${lastRow}C${i + 1}`)
+
+                // Para cada filtro solicitado
+                for (let [columnName, filter] of search_for) switch (mode) {
+
+                    case 'partialstring':
+
+                        // Efetua a busca
+                        wip = this._table
+                            .getRange(columnRanges.get(columnName))
+                            .createTextFinder(filter)
+                            .useRegularExpression(false)
+                            .ignoreDiacritics(true)
+                            .matchCase(false)
+                            .matchEntireCell(false)
+                            .findAll()
+
+                        // Caso finder vazio, encerrar execução
+                        if (wip.length == 0) return
+
+                        // Armazenar finder no array de queries
+                        queries.push(wip)
+                        break;
+
+
+                    case 'fullstring':
+
+                        // Efetua a busca
+                        wip = this._table
+                            .getRange(columnRanges.get(columnName))
+                            .createTextFinder(filter)
+                            .useRegularExpression(false)
+                            .ignoreDiacritics(false)
+                            .matchCase(true)
+                            .matchEntireCell(true)
+                            .findAll()
+
+                        // Caso finder vazio, encerrar execução
+                        if (wip.length == 0) return
+
+                        // Armazenar finder no array de queries
+                        queries.push(wip)
+                        break;
+
+                    case 'regex':
+
+                        // Efetua a busca
+                        wip = this._table
+                            .getRange(columnRanges.get(columnName))
+                            .createTextFinder(filter.source)
+                            .useRegularExpression(true)
+                            .matchCase(!filter.ignoreCase)
+                            .findAll()
+
+                        // Caso finder vazio, encerrar execução
+                        if (wip.length == 0) return
+
+                        // Armazenar finder no array de queries
+                        queries.push(wip)
+                        break;
+                }
+
+                // Obtém o menor query
+                let smallQuery = queries.reduce((small, actual) => {
+                    return (actual.length < small.length) ? actual : small
+                })
+
+                // Limpa var de queries para receber índices
+                queries = []
+
+                // Armazena todos os índices
+                for (let row of smallQuery) queries.push(row.getRow() - 1)
+
+                // Requisita esses dados na memória
+                this._fetchNewData(queries, columnIndexes)
+            }
+
+
+
+
+            // ETAPA DE ITERAÇÃO
+
+            // Para cada valor
+            for (let [key, value] of this._data) {
+
+                // Se key deletada, pular
+                if (this._keys.get(key) === 'deleted') continue
+
+                // Cria var de teste
+                let filterPasses = true
+
+                // Para cada filtro solicitado
+                for (let [colName, condition] of search_for) {
+
+                    // Executa um AND com o dado
+                    filterPasses = match(value[colName], condition, mode)
+
+                    // Se o filtro nõo passar, parar imediatamente
+                    if (!filterPasses) break;
+                }
+
+                // Se filtro não passou, pular
+                if (!filterPasses) continue
+
+                // Devolve resultado ao iterador
+                yield this.get(key)
+            }
+
+
+        } catch (e) {
+            // Retorna erro.
+            throw Error(`${this._log} ${e.stack}`)
         }
     }
 
@@ -1576,6 +1615,135 @@ class Codex {
             // Retorna erro.
             throw Error(`${this._log} ${e.stack}`)
         }
+    }
+
+    commit(enableBackup = false) {
+
+        // HELPERS
+        let createCellValue = (value) => {
+
+            // Converte valor
+            let convertedValue = this._typeJStoGS(value, 'commit')
+
+            // Retorna com base no tipo
+            switch (typeof convertedValue) {
+
+                case "string":
+                    return { "userEnteredValue": { "stringValue": convertedValue } }
+
+                case "number":
+                    return { "userEnteredValue": { "numberValue": convertedValue } }
+
+                case "boolean":
+                    return { "userEnteredValue": { "boolValue": convertedValue } }
+
+                case "object":
+                    // Obtém o zero do Google Sheets
+                    let dateZeroLotus123 = Date.UTC(1899, 11, 30)
+
+                    // Obtém a data atual no mesmo formato
+                    let convertedDateInUTC = Date.UTC(
+                        convertedValue.getFullYear(),
+                        convertedValue.getMonth(),
+                        convertedValue.getDate(),
+                        convertedValue.getHours(),
+                        convertedValue.getMinutes(),
+                        convertedValue.getSeconds(),
+                        convertedValue.getMilliseconds()
+                    );
+
+                    // Obtém a data compatível com o Sheets
+                    let convertedDate = (convertedDateInUTC - dateZeroLotus123) / 86400000
+
+                    // Retorna valor
+                    return {
+                        "userEnteredValue": { "numberValue": convertedDate },
+                        "userEnteredFormat": { "numberFormat": { "type": "DATE_TIME" } }
+                    }
+            }
+        }
+
+
+
+
+
+        // Var para o cadeado
+        let locker = LockService.getScriptLock()
+        let lockTries = 0
+
+        try {
+
+            // Tenta obter o cadeado
+            while (!locker.tryLock(5000)) {
+                if (lockTries == 1) console.warn(`${this._log} Another instance is commiting. Awaiting...`)
+                lockTries++
+            }
+
+            // Cria backup caso requisitado
+            if (enableBackup) this._createBackup()
+
+
+            // ETAPA DE MONTAGEM DO OBJETO DE REQUEST
+
+            // Limpa valores que não irão ser commitados
+            for (let [k, v] of this._keys) if (v === 'unmodified') {
+                this._keys.delete(k)
+                this._data.delete(k)
+            }
+
+            // Monta variáveis
+            let rowIndexes = this._getRowIndexesByKey([...this._keys.keys()])
+            let columnIndexes = this._getColumnIndexes()
+            let lastRow = this._table.getLastRow()
+            let requestDelete = []
+
+            // CASO SE QUEIRA LIMPAR TODA A PLANILHA
+            if (this._wipeOnCommit) requestDelete.push({
+                deleteDimension: {
+                    range: {
+                        sheetId: this._tableID,
+                        dimension: "ROWS",
+                        startIndex: 1,
+                        endIndex: lastRow
+                    }
+                }
+            })
+
+
+            // PRÓXIMOS PASSOS
+
+            // 0. Separar todas as funções que vão criar esse request em helpers.
+
+            // 1. Fazer um switch para montar o request de adicionar linhas,
+            //  remover linhas ou atualizar linhas com base no estado da key.
+
+            // 2. Ordenar todas os requests na ordem que serão chamados, de baixo para cima.
+
+            // 3. Concatenar requests próximos e concomitantes
+
+            // 4. Definir um limite de estouro da API, o ponto onde o request vai ser grande
+            // demais e pode falhar para subdividi-lo
+
+            // 5. Efetuar o request e ver se deu certo (ele é atômico, então se algo der
+            // errado nenhuma edição é feita), e se não deu, como tratar
+
+            // 6. Destruir as relações de todos os objetos da Codex para o Garbage Collector
+            // fazer seu trabalho.
+
+
+
+        }
+
+        catch (e) {
+            // Retorna erro.
+            throw Error(`${this._log} ${e.stack}`)
+        }
+
+        finally {
+            // Libera o cadeado
+            locker.releaseLock()
+        }
+
     }
 
 }
