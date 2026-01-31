@@ -319,13 +319,13 @@ class Codex {
     /**
      * Requisita novos dados da planilha via API avançada e realiza o pivoteamento para o cache interno.
      * Suporta busca completa ou por chaves específicas.
-     * * @param {string[]|boolean} requestedKeys - Chaves para serem buscadas, ou true para realizar a requisição de colunas completas.
+     * * @param {string[]|number[]|boolean} requestedKeysOrRows - Chaves ou linhas para serem buscadas, ou true para realizar a requisição de colunas completas.
      * @param {Map<string, number>} [columnIndexes] - Mapa contendo os nomes das colunas e seus respectivos 
      * índices. Caso omitido, utiliza o mapeamento padrão da instância.
      * @throws {Error} Se o parâmetro requestedKeys não for um array nem o valor booleano true.
      * @private
      */
-    _fetchNewData(requestedKeys, columnIndexes) {
+    _fetchNewData(requestedKeysOrRows, columnIndexes) {
 
         // HELPERS
 
@@ -462,20 +462,56 @@ class Codex {
 
 
         // Valida parâmetros
-        if (!Array.isArray(requestedKeys) && requestedKeys != true) throw Error(`Invalid requestedKeys.`)
+        if (!Array.isArray(requestedKeysOrRows) && requestedKeysOrRows != true) throw Error(`Invalid requestedKeysOrRows.`)
 
         let requestedData = new Map()                                               // Informações de dados a serem requeridos para a API
-        let mode = Array.isArray(requestedKeys) ? "ROWS" : "COLUMNS"                // Define modo de execução
+        let mode = Array.isArray(requestedKeysOrRows) ? "ROWS" : "COLUMNS"          // Define modo de execução
         if (columnIndexes == undefined) columnIndexes = this._getColumnIndexes()    // Obtém índices de colunas, caso não recebido
-        let requestedRows = mode === "ROWS" ?                                       // Caso modo de linhas
-            [...this._getRowIndexesByKey(requestedKeys).values()] :                     // Obtém índice das linhas
-            undefined                                                                  // Caso não, mantém indefinido
+        let lastRow = this._table.getLastRow();                                     // Obtém última linha
+        let requestedRows;                                                          // Var para valores de linhas
+
+        // Obtém índices das linhas
+        if (mode === 'ROWS') {
+
+            // Testa se array está vazia
+            if (requestedKeysOrRows.length === 0) return;
+
+            // Testa se todos são do mesmo tipo
+            let type = typeof requestedKeysOrRows[0]
+            if (!requestedKeysOrRows.every(v => (typeof v === type))) {
+                throw Error(`requestedKeysOrRows must be a uniform array of strings (PKs) or numbers (Indexes).`)
+            }
+
+            // Alterna entre tipos
+            switch (type) {
+
+                case 'number':
+
+                    // Testa se índices são válidos
+                    if (requestedKeysOrRows.some(v => (v >= lastRow || v < 1))) {
+                        throw Error(`requestedKeysOrRows must be more than 0 and less than last row index.`)
+                    }
+
+                    // Popula eles na array
+                    requestedRows = [...requestedKeysOrRows]
+                    break;
+
+                case 'string':
+
+                    // Obtém os índices com função auxiliar
+                    requestedRows = [...this._getRowIndexesByKey(requestedKeysOrRows).values()]
+                    break;
+
+                default:
+                    throw Error(`requestedKeysOrRows must be a uniform array of strings (PKs) or numbers (Indexes).`)
+            }
+
+        }
 
         // Monta os objetos de requisição
         switch (mode) {
 
             case "COLUMNS":
-                let lastRow = this._table.getLastRow();
                 for (let [colName, colIndex] of columnIndexes) {
                     requestedData.set(colName, {
                         gridRange: {
@@ -1241,7 +1277,87 @@ class Codex {
         }
     }
 
+
+    /**
+     * Performs a structured search across the dataset using a specific matching strategy.
+     * * This method acts as a Generator, lazily yielding records that match **all** the provided criteria (logical AND).
+     * In "minimal" mode, it uses Google Sheets' native search (TextFinder) to locate rows 
+     * before fetching data into memory.
+     * * @param {("fullstring"|"partialstring"|"regex")} mode - The matching strategy to be applied:
+     * - `"fullstring"`: Checks for exact equality (case-sensitive).
+     * - `"partialstring"`: Checks if the value contains the substring (case-insensitive).
+     * - `"regex"`: Matches using a Regular Expression (must be compatible with Google Sheets TextFinder Class).
+     * * @param {Object.<string, string|RegExp>} search_for - A key-value object defining the filters.
+     * - **Keys:** Must be valid column names defined in the schema.
+     * - **Values:** The criteria to match against. Must be a `string` for string modes or a `RegExp` object for regex mode.
+     * * @yields {Object} The next matching record, allowing for direct modification.
+     * @returns {Generator<Object>} A generator that yields matching records one by one.
+     * * @throws {Error} If `mode` is invalid or `search_for` is empty/not an object.
+     * @throws {Error} If a column specified in `search_for` does not exist in the table.
+     * @throws {Error} If the value type provided does not match the expected `mode` (e.g., passing a string when `regex` is expected).
+     * @throws {Error} If a provided RegExp is incompatible with Google Sheets' TextFinder Class.
+     * * @example
+     * // 1. Exact match (Find active users in the "IT" department)
+     * for (const user of db.search("fullstring", { Department: "IT", Status: "Active" })) {
+     * console.log(user.Name);
+     * }
+     * * @example
+     * // 2. Partial match (Find products containing "Apple" in the name)
+     * // Matches "Apple", "Pineapple", "Apple Pie" (Case Insensitive)
+     * for (const product of db.search("partialstring", { ProductName: "Apple" })) {
+     * product.Stock -= 1; // You can directly modify the result
+     * }
+     * * @example
+     * // 3. Regex match (Find emails ending in @gmail.com or @yahoo.com)
+     * const emailPattern = /@(gmail|yahoo)\.com$/;
+     * for (const lead of db.search("regex", { Email: emailPattern })) {
+     * // ...
+     * }
+     */    
     *search(mode, search_for) {
+
+        // HELPER
+        let match = (value, condition, mode) => {
+
+            // Caso seja um proxy, busca trabalhar com os dados originais
+            if (value && value[this._isCdxProxy]) value = value[this._cdxProxyTarget]
+
+            // DATAS (sem suporte)
+            if (value instanceof Date) return false
+
+            // REGEX (sem suporte)
+            if (value instanceof RegExp) return false
+
+            // ARRAY, SET, MAP (testar)
+            if (value instanceof Set || value instanceof Array || value instanceof Map) {
+
+                for (let v of value) {                              // Para cada valor
+                    if (match(v, condition, mode)) return true;     // Se valor true, encerrar com true
+                }
+                return false;                                       // Se nada for true, encerrar com false
+            }
+
+            // OBJETO LITERAL (testar)
+            if (Object.prototype.toString.call(value) === '[object Object]') {
+
+                for (let v of Object.entries(value)) {              // Para cada valor
+                    if (match(v, condition, mode)) return true;     // Se valor true, encerrar com true
+                }
+                return false;                                       // Se nada for true, encerrar com false
+            }
+
+            // Converte para texto
+            let convertedValue = String(value)
+
+            // Executa comparação
+            switch (mode) {
+                case 'fullstring': return condition === convertedValue
+                case 'partialstring': return convertedValue.toLowerCase().includes(condition.toLowerCase())
+                case 'regex': return condition.test(convertedValue)
+            }
+        }
+
+
 
         // ETAPA DE VALIDAÇÃO
 
@@ -1255,8 +1371,16 @@ class Codex {
             throw Error(`search_for is not an literal object.`)
         }
 
+        // Converte para Map, se válido
+        search_for = new Map(Object.entries(search_for))
+
+        // Verifica se search_for é vazio
+        if (search_for.size === 0) {
+            throw Error(`search_for can't be empty.`)
+        }
+
         // Valida valores com base no tipo
-        for (let value of Object.values(search_for)) switch (mode) {
+        for (let value of search_for.values()) switch (mode) {
 
             // Caso string
             case 'fullstring':
@@ -1266,13 +1390,13 @@ class Codex {
                 if (typeof value !== 'string') throw Error(`${value} is not an string.`)
                 break;
 
-            
+
             // Caso Regex
             case 'regex':
 
                 // Valida se é msm um Regex
                 if (!(value instanceof RegExp)) throw Error(`${value} is not an regex.`)
-                
+
                 // Testa a compatibilidade com GSheets
                 try { this._table.getRange(1, 1).createTextFinder(value.source).useRegularExpression(true).findNext() }
                 catch (e) { throw Error(`${value.source} is not an regex compatible with Google Sheets.`) }
@@ -1281,7 +1405,7 @@ class Codex {
         }
 
         // Verifica se tem alguma propriedade inválida
-        if (!Object.keys(search_for).every(k => this._options.columns.has(k))) {
+        if (![...search_for.keys()].every(k => this._options.columns.has(k))) {
             throw Error(`Some properties does not exist in Sheet or constructor.`)
         }
 
@@ -1291,16 +1415,19 @@ class Codex {
 
         if (this._options.mode === 'minimal') {
 
-            let lastRow = this._table.getLastRow();     // Obtém última linha
-            let columnRanges = new Map()                // Obtém índices das colunas
-            let queries = []                            // Prepara para buscar na planilha
-            let wip = undefined                         // Prepara var para trabalhos em loop
+            let lastRow = this._table.getLastRow();         // Obtém última linha
+            if (lastRow < 2) return;                        // Para execução se não tem linhas
+
+            let columnIndexes = this._getColumnIndexes()    // Obtém índices das colunas
+            let columnRanges = new Map()                    // Prepara para receber ranges das colunas
+            let queries = []                                // Prepara para buscar na planilha
+            let wip = undefined                             // Prepara var para trabalhos em loop
 
             // Converte índice de colunas em ranges
-            for (let [c, i] of this._getColumnIndexes()) columnRanges.set(c, `R2C${i + 1}:R${lastRow}C${i + 1}`)
+            for (let [c, i] of columnIndexes) columnRanges.set(c, `R2C${i + 1}:R${lastRow}C${i + 1}`)
 
             // Para cada filtro solicitado
-            for (let [columnName, filter] of Object.entries(search_for)) switch (mode) {
+            for (let [columnName, filter] of search_for) switch (mode) {
 
                 case 'partialstring':
 
@@ -1359,8 +1486,50 @@ class Codex {
                     break;
             }
 
+            // Obtém o menor query
+            let smallQuery = queries.reduce((small, actual) => {
+                return (actual.length < small.length) ? actual : small
+            })
 
-            // PAREI AQUI
+            // Limpa var de queries para receber índices
+            queries = []
+
+            // Armazena todos os índices
+            for (let row of smallQuery) queries.push(row.getRow() - 1)
+
+            // Requisita esses dados na memória
+            this._fetchNewData(queries, columnIndexes)
+        }
+
+
+
+
+        // ETAPA DE ITERAÇÃO
+
+        // Para cada valor
+        for (let [key, value] of this._data) {
+
+            // Se key deletada, pular
+            if (this._keys.get(key) === 'deleted') continue
+
+            // Cria var de teste
+            let filterPasses = true
+
+            // Para cada filtro solicitado
+            for (let [colName, condition] of search_for) {
+
+                // Executa um AND com o dado
+                filterPasses = match(value[colName], condition, mode)
+
+                // Se o filtro nõo passar, parar imediatamente
+                if (!filterPasses) break; 
+            }
+
+            // Se filtro não passou, pular
+            if (!filterPasses) continue
+
+            // Devolve resultado ao iterador
+            yield this.get(key)
         }
     }
 
