@@ -1709,6 +1709,33 @@ class Codex {
                 }
             })
 
+            // Vars do switch
+            let rowIndex
+
+            // Itera sobre os valores
+            for (let [key, status] of this._keys) switch (status) {
+
+                case 'deleted':
+
+                    rowIndex = rowIndexes.get(key)      // Obtém índice da linha
+                    if (rowIndex === undefined) break;  // Caso essa linha já não exista, ignorar
+
+                    // Adiciona o request de exclusão
+                    requestDelete.push({
+                        deleteDimension: {
+                            range: {
+                                sheetId: this._tableID,
+                                dimension: "ROWS",
+                                startIndex: rowIndex,
+                                endIndex: rowIndex + 1
+                            }
+                        }
+                    })
+
+                    // Encerra para este item
+                    break;
+            }
+
 
             // PRÓXIMOS PASSOS
 
