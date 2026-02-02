@@ -1620,7 +1620,19 @@ class Codex {
     commit(enableBackup = false) {
 
         // HELPERS
-        let createCellValue = (value) => {
+
+        /**
+         * Converte um valor do Codex para a estrutura CellData da API avançada do Google Sheets.
+         * Esta função atua como um complemento da typeJStoGS, traduzindo os tipos primitivos do
+         * JavaScript e o esquema exigido pelo método `batchUpdate`. Ela normaliza os dados,
+         * trata a conversão cronológica para o sistema de números de série do Sheets (base Lotus 1-2-3)
+         * e define máscaras de formatação explícitas para garantir a integridade visual na planilha.
+         * * @param {*} value - O valor original proveniente do Codex (String, Number, Boolean, Date ou JSON).
+         * @returns {Object} Um objeto compatível com `GoogleAppsScript.Sheets.Schema.CellData`.
+         * Retorna um objeto vazio `{}` para strings vazias para representar células nulas.
+         * @private
+         */
+        let api_createCellData = (value) => {
 
             // Converte valor
             let convertedValue = this._typeJStoGS(value, 'commit')
@@ -1628,16 +1640,29 @@ class Codex {
             // Retorna com base no tipo
             switch (typeof convertedValue) {
 
+
                 case "string":
-                    return { "userEnteredValue": { "stringValue": convertedValue } }
+                    if (convertedValue === "") return {}
+
+                    return {
+                        "userEnteredValue": { "stringValue": convertedValue },
+                        "userEnteredFormat": { "numberFormat": { "type": "TEXT" } }
+                    }
+
 
                 case "number":
-                    return { "userEnteredValue": { "numberValue": convertedValue } }
+                    return {
+                        "userEnteredValue": { "numberValue": convertedValue },
+                        "userEnteredFormat": { "numberFormat": { "type": "NUMBER" } }
+                    }
+
 
                 case "boolean":
                     return { "userEnteredValue": { "boolValue": convertedValue } }
 
+
                 case "object":
+
                     // Obtém o zero do Google Sheets
                     let dateZeroLotus123 = Date.UTC(1899, 11, 30)
 
@@ -1673,15 +1698,18 @@ class Codex {
 
         try {
 
-            // Tenta obter o cadeado
+            // Bloqueia a planilha com o servico LockService. Impede outras instâncias de Codex
+            // de escreverem na mesma planilha ao mesmo tempo.
             while (!locker.tryLock(5000)) {
-                if (lockTries == 1) console.warn(`${this._log} Another instance is commiting. Awaiting...`)
+                if (lockTries == 1) console.warn(`${this._log} Another instance is using this sheet. Awaiting...`)
                 lockTries++
             }
 
             // Cria backup caso requisitado
             if (enableBackup) this._createBackup()
 
+
+            
 
             // ETAPA DE MONTAGEM DO OBJETO DE REQUEST
 
@@ -1696,8 +1724,10 @@ class Codex {
             let columnIndexes = this._getColumnIndexes()
             let lastRow = this._table.getLastRow()
             let requestDelete = []
+            let requestAdd = []
 
-            // CASO SE QUEIRA LIMPAR TODA A PLANILHA
+            // Caso se queira limpar toda a planilha,
+            // pré-adiciona um request de exclusão total
             if (this._wipeOnCommit) requestDelete.push({
                 deleteDimension: {
                     range: {
@@ -1709,11 +1739,15 @@ class Codex {
                 }
             })
 
+
             // Vars do switch
-            let rowIndex
+            let rowIndex, data, values, index
+
 
             // Itera sobre os valores
             for (let [key, status] of this._keys) switch (status) {
+
+
 
                 case 'deleted':
 
@@ -1734,6 +1768,24 @@ class Codex {
 
                     // Encerra para este item
                     break;
+
+
+                    
+                case 'new':
+
+                    data = this._data.get(key)                          // Obtém dados
+                    values = new Array(columnIndexes.size).fill({})     // Prepara para receber os valores
+
+                    // Para cada coluna
+                    for (let [colName, value] of Object.entries(data)) {
+                        value = api_createCellData(value)   // Converte dado para formato da API
+                        index = columnIndexes.get(colName)  // Obtém índice da coluna
+                        values[index] = value               // Adiciona item na array
+                    }
+
+                    requestAdd.push({ "values": values })                   // Armazena valor no array
+                    break;                                                  // Encerra para este item
+
             }
 
 
