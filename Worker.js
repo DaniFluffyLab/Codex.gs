@@ -396,7 +396,7 @@ class Codex {
 
     /**
      * Emite log, avisos e erros da biblioteca.
-     * * @param {number} code - O código identificador da ocorrência.
+     * @param {number} code - O código identificador da ocorrência.
      * @param {*} [info] - Contexto dinâmico para a mensagem. 
      * * @returns {Error|null} Retorna um objeto `Error` formatado para ser lançado via `throw`,
      * ou `null` caso a mensagem seja apenas um aviso operacional (`console.warn`).
@@ -411,8 +411,11 @@ class Codex {
 
             // Avisos operacionais
             case 100: console.warn(`${prefix} Another Codex instance is running an critical task. Awaiting...`); return null;
+            case 101: console.warn(`${prefix} Too much data, activating safety mode. Consider requesting fewer columns or using minimal mode with Codex.search() to increase speed.`); return null;
 
-            // Erros de configuração
+
+
+            // Erros do usuário no construtor
             case 200: return Error(`${prefix} ` +
                 `The "Google Sheets API" Advanced API is not enabled. To use Codex library, you need ` +
                 `to activate it with identifier "Sheets".\n` +
@@ -424,13 +427,42 @@ class Codex {
             case 205: return Error(`${prefix} Invalid mode: "${info}".`)
             case 206: return Error(`${prefix} Column "${info}" is not a string.`)
 
-            // Erros de API
+            // Erros do usuário ao obter colunas
+            case 210: return Error(`${prefix} Sheet "${info}" is empty (no headers found).`)
+            case 211: return Error(`${prefix} Primary Key column "${info}" does not exist.`)
+            case 212: return Error(`${prefix} Requested column "${info}" do not exist.`)
+
+            // Erros do usuário ao obter linhas
+            case 220: return Error(`${prefix} Unable to get indexes from keys. \n\n${info.stack}`)
+
+
+
+            // Erros de API no construtor
             case 300: return Error(`${prefix} Failed to load spreadsheet. \n\n${info.stack}`)
             case 301: return Error(`${prefix} Failed to load sheet/tab. \n\n${info.stack}`)
             case 302: return Error(`${prefix} Failed to lock sheet.`)
 
+            // Erros da API avançada
+            case 310: return Error(`${prefix} SheetsAPI Error. \n\n${info.stack}`)
+            
+
+
+            // Bug na Codex ao obter linhas
+            case 400: return Error(`${prefix} Invalid requestedKeys.`)
+            case 401: return Error(`${prefix} Error locating keyColumn: \n\n${info.stack}`)
+
+            // Bug na Codex ao carregar dados
+            case 410: return Error(`${prefix} Invalid "requestedKeysOrRows".`)
+            case 411: return Error(`${prefix} "requestedKeysOrRows" must be a uniform array of strings (PKs) or numbers (Indexes).`)
+            case 412: return Error(`${prefix} "requestedKeysOrRows" must be more than 0 and less than last row index.`)
+            
+
             // Erro desconhecido
             case 500: return Error(`${prefix} ${info.message || `Unhandled error.`} \n\n${info.stack}`)
+
+
+            // PAREI NA TYPEJSTOGS
+            
         }
 
     }
@@ -450,14 +482,14 @@ class Codex {
         let lastColumn = this._table.getLastColumn()                    // Obtém última coluna
 
         // Lança erro se aba completamente vazia
-        if (lastColumn === 0) throw Error(`The sheet "${this._tableName}" is empty (no headers found).`);
+        if (lastColumn === 0) { throw this._log(210, this._tableName); }
 
         let columnArray = this._table.getRange(1, 1, 1, lastColumn)     // Seleciona cabeçalho
             .getValues()[0]                                             // Obtém dados
         columnIndexes = new Map(columnArray.map((v, i) => [v, i]))      // Insere dados dos índices no Map
 
         // Valida a existência de uma coluna de keys
-        if (!columnIndexes.has(this._keyColumnName)) { throw Error(`Primary Key column "${this._keyColumnName}" does not exist.`); }
+        if (!columnIndexes.has(this._keyColumnName)) { throw this._log(211, this._keyColumnName); }
 
         // Caso não hajam parâmetros sobre quais colunas obter, alimentar com nome de todas as colunas
         if (this._options.columns.size === 0) { this._options.columns = new Set(columnIndexes.keys()) }
@@ -466,7 +498,7 @@ class Codex {
         filteredColumnIndexes.set(this._keyColumnName, columnIndexes.get(this._keyColumnName))  // Garante coluna de key
         for (let columnName of this._options.columns) {                                         // Para cada coluna requisitada:
             let hasInvalid = !columnIndexes.has(columnName)                                         // Verifica a validade da colunas
-            if (hasInvalid) { throw Error(`Requested column "${columnName}" do not exist.`); }      // Lança erro se inválido 
+            if (hasInvalid) { throw this._log(212, columnName) }                                    // Lança erro se inválido 
             filteredColumnIndexes.set(columnName, columnIndexes.get(columnName))                    // Armazena seu valor no Map de filtradas
         }
 
@@ -497,12 +529,13 @@ class Codex {
         mode = requestedKeys == true ? "FULL" : mode
         requestedKeys = Array.isArray(requestedKeys) ? new Set([...requestedKeys]) : requestedKeys
 
-        if (mode === undefined) throw Error(`Invalid requestedKeys.`)
+        // Caso haja bug interno, enviar erro
+        if (mode === undefined) throw this._log(400)
 
         // Procura coluna de índices
-        try { keys_colIdx = columnIndexes.get(this._keyColumnName) }                        // Procura pelo nome
-        catch (e) { throw Error(`Error locating keyColumn: \n\n${e.stack}`) }    // Retorna outros erros
-        if (keys_colIdx == undefined) throw Error(`keyColumn not found`)     // Se não achar coluna, lança erro
+        try { keys_colIdx = columnIndexes.get(this._keyColumnName) }            // Procura pelo nome
+        catch (e) { throw this._log(401, e) }                                   // Retorna outros erros
+        if (keys_colIdx == undefined) throw this._log(211, this._keyColumnName) // Se não achar coluna, lança erro
 
         try {
 
@@ -511,7 +544,7 @@ class Codex {
                 let index = this._table.getRange(2, keys_colIdx + 1, lastRow - 1)       // Obtém range de keys
                     .createTextFinder(requestedKeys).matchEntireCell(true)              // Pesquisa na planilha
                     .findPrevious()                                                     // Obtém índice da última instância
-                if (index !== null) rowIndexes.set(requestedKeys, index.getRow() - 1)  // Adiciona indice no Map
+                if (index !== null) rowIndexes.set(requestedKeys, index.getRow() - 1)   // Adiciona indice no Map
                 return rowIndexes                                                       // Encerra execução
             }
 
@@ -545,7 +578,7 @@ class Codex {
                 // Encerra execução
                 return rowIndexes
             }
-        } catch (e) { throw Error(`Error to get keys: \n\n${e.stack}`) }  // Retorna outros erros
+        } catch (e) { throw this._log(220, e) }  // Retorna outros erros
     }
 
     /**
@@ -694,7 +727,7 @@ class Codex {
 
 
         // Valida parâmetros
-        if (!Array.isArray(requestedKeysOrRows) && requestedKeysOrRows != true) throw Error(`Invalid requestedKeysOrRows.`)
+        if (!Array.isArray(requestedKeysOrRows) && requestedKeysOrRows != true) throw this._log(410)
 
         let requestedData = new Map()                                               // Informações de dados a serem requeridos para a API
         let mode = Array.isArray(requestedKeysOrRows) ? "ROWS" : "COLUMNS"          // Define modo de execução
@@ -711,7 +744,7 @@ class Codex {
             // Testa se todos são do mesmo tipo
             let type = typeof requestedKeysOrRows[0]
             if (!requestedKeysOrRows.every(v => (typeof v === type))) {
-                throw Error(`requestedKeysOrRows must be a uniform array of strings (PKs) or numbers (Indexes).`)
+                throw this._log(411)
             }
 
             // Alterna entre tipos
@@ -721,7 +754,7 @@ class Codex {
 
                     // Testa se índices são válidos
                     if (requestedKeysOrRows.some(v => (v >= lastRow || v < 1))) {
-                        throw Error(`requestedKeysOrRows must be more than 0 and less than last row index.`)
+                        throw this._log(412)
                     }
 
                     // Popula eles na array
@@ -735,7 +768,7 @@ class Codex {
                     break;
 
                 default:
-                    throw Error(`requestedKeysOrRows must be a uniform array of strings (PKs) or numbers (Indexes).`)
+                    throw this._log(411)
             }
 
         }
@@ -793,7 +826,7 @@ class Codex {
 
             // Checa se é um erro de request grande demais
             if (e.message.includes("Response Code: 413. Message: response too large.")) mode = `${mode}-SAFETY`
-            else throw e    // Se não for, lança erro
+            else throw this._log(310, e)    // Se não for, lança erro
         }
 
 
@@ -834,8 +867,8 @@ class Codex {
             case "COLUMNS-SAFETY":
 
                 // Avisa o usuário sobre o uso do modo de segurança
-                console.warn(`${this._log} Too much data, activating safety mode. Consider requesting fewer columns or using minimal mode with Codex.search() to increase speed.`)
-
+                this._log(101)
+                
                 // Obtém dados de key
                 let keyData = SAFEMODE_getValuesByGridRange(this._table, requestedData.get(this._keyColumnName).gridRange).map(([v]) => String(v).trim())
 
@@ -896,8 +929,8 @@ class Codex {
             case "ROWS-SAFETY":
 
                 // Avisa o usuário sobre o uso do modo de segurança
-                console.warn(`${this._log} Too much data, activating safety mode. Consider requesting fewer rows or using minimal mode with Codex.search() to increase speed.`)
-
+                this._log(101)
+                
                 let mergedRequestedRows = SAFEMODE_mergeGridRanges(requestedData, "ROWS")       // Mescla as requisições
                 let safe_colOffset = Math.min(...columnIndexes.values())                        // Obtém o offset de colunas
                 let safe_keyIndex = columnIndexes.get(this._keyColumnName) - safe_colOffset     // Obtém o índice das keys
