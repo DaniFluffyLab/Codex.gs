@@ -7,7 +7,6 @@
 
 class Codex {
 
-
     /**
      * Creates a new Codex instance to manage a Google Sheets tab as a persistent key-value store.
      * This class adapts the Google Sheets API to function similarly to a JavaScript `Map`,
@@ -46,24 +45,24 @@ class Codex {
     constructor(sheetId, tableName, keyColumnName, options) {
 
 
-        // FASE 0 - VALIDAÇÃO DE DEPENDÊNCIAS E DEFINIÇÃO DE VARS GLOBAIS
 
+        // FASE 0 - VALIDAÇÃO DE DEPENDÊNCIAS E DEFINIÇÃO DE VARS GLOBAIS
 
         /**
          * Prefixo identificador utilizado em mensagens de log e erros da instância.
          * @type {string}
          * @private
          */
-        this._log = `[ CODEX | SheetID:"${sheetId}" | Table: "${tableName}" ]\n`;
+        this._logSign = `[ CODEX | SheetID:"${sheetId}" | Table: "${tableName}" ]\n`;
 
 
+
+
+        // Verifica se a API Sheets está disponível
         if (typeof Sheets === 'undefined') {
-            throw new Error(
-                `[CODEX] The "Google Sheets API" Advanced API is not enabled. ` +
-                `To use Codex library, you need to activate it with identifier "Sheets".` +
-                `Documentation: https://developers.google.com/apps-script/guides/services/advanced`
-            );
+            throw this._log(200);
         };
+
 
 
         /**
@@ -72,7 +71,8 @@ class Codex {
          * @private
          */
         this._sheetID = sheetId;
-        if (typeof sheetId !== 'string') throw Error(`${this._log} sheetID is not a string.`)
+        if (typeof sheetId !== 'string') throw this._log(201)
+
 
 
         /**
@@ -80,9 +80,10 @@ class Codex {
          * @type {GoogleAppsScript.Spreadsheet.Spreadsheet}
          * @private
          */
-        this._sheet;                                                                            // Declara variável
-        try { this._sheet = SpreadsheetApp.openById(this._sheetID) }                            // Carrega planilha
-        catch (e) { throw Error(`${this._log} Failed to load spreadsheet. \n\n${e.stack}`) };   // Retorna algum erro
+        this._sheet;                                                    // Declara variável
+        try { this._sheet = SpreadsheetApp.openById(this._sheetID) }    // Carrega planilha
+        catch (e) { throw this._log(300) };                             // Retorna algum erro
+
 
 
         /**
@@ -91,7 +92,8 @@ class Codex {
          * @private
          */
         this._tableName = tableName;
-        if (typeof tableName !== 'string') throw Error(`${this._log} tableName is not a string.`)
+        if (typeof tableName !== 'string') throw this._log(202)
+
 
 
         /**
@@ -99,12 +101,11 @@ class Codex {
          * @type {GoogleAppsScript.Spreadsheet.Sheet}
          * @private
          */
-        this._table;                                                                        // Declara variável
-        try {
-            this._table = this._sheet.getSheetByName(this._tableName)                       // Carrega página
-            if (this._table === null) throw Error(`Sheet not found`)                        // Lança erro se não houver página
-        }
-        catch (e) { throw Error(`${this._log} Failed to load sheet/tab. \n\n${e.stack}`) }  // Retorna outros erros
+        this._table;                                                        // Declara variável
+        try { this._table = this._sheet.getSheetByName(this._tableName) }   // Carrega página
+        catch (e) { throw this._log(301) }                                  // Retorna outros erros
+        if (this._table === null) throw this._log(203, this._tableName)     // Lança erro se não houver página
+
 
 
         /**
@@ -115,13 +116,14 @@ class Codex {
         this._tableID = this._table.getSheetId();
 
 
+
         /**
          * O nome do cabeçalho da coluna utilizada como chave primária.
          * @type {string}
          * @private
          */
         this._keyColumnName = keyColumnName;
-        if (typeof keyColumnName !== 'string') throw Error(`${this._log} keyColumnName is not a string.`)
+        if (typeof keyColumnName !== 'string') throw this._log(204, this._tableName)
 
 
 
@@ -139,8 +141,10 @@ class Codex {
             columns: new Set(options.columns ?? []),
             enableTypeInference: options.enableTypeInference ?? true,
         };
-        if (this._options.mode !== 'minimal' && this._options.mode !== 'full') throw Error(`${this._log} Invalid mode: ${this._options.mode}`)
-        for (let c of this._options.columns) { if (typeof c !== 'string') throw Error(`${this._log} Column "${c}" is not a string.`) }
+        // Testa validade do modo de operação
+        if (this._options.mode !== 'minimal' && this._options.mode !== 'full') throw this._log(205, this._options.mode)
+        // Testa se colunas são strings
+        for (let c of this._options.columns) { if (typeof c !== 'string') throw this._log(206, c) }
 
 
 
@@ -152,6 +156,8 @@ class Codex {
          */
         this._data = new Map();
 
+
+
         /**
          * Mapa de cache contendo os proxies dos registros obtidos via funções de requisição.
          * Associa cada objeto original ao seu respectivo proxy.
@@ -160,9 +166,13 @@ class Codex {
          */
         this._proxies = new WeakMap();
 
+
+
         // Vars de metadados para detectar proxies 
         this._isCdxProxy = Symbol("isCodexProxy")
         this._cdxProxyTarget = Symbol("getTarget")
+
+
 
         /**
          * Mapa que rastreia o status de sincronização das chaves alteradas na transação atual.
@@ -173,6 +183,7 @@ class Codex {
         this._keys = new Map();
 
 
+
         /**
          * Marca se a planilha deve ser toda zerada.
          * @type {boolean}
@@ -181,28 +192,249 @@ class Codex {
         this._wipeOnCommit = false;
 
 
-        // Carrega dados de índices de colunas
-        let columnIndexes = this._getColumnIndexes()
 
-        // Obtém dados baseados no modo de operação
-        switch (this._options.mode) {
+        // FASE 1: INICIA O CONSTRUTOR
 
-            case "minimal":
+        try {
 
-                try {
-                    let keys = this._getRowIndexesByKey(true, columnIndexes)            // Obtém keys
-                    this._keys = new Map([...keys.keys()].map(k => [k, "unmodified"]))  // Adiciona keys ao Map mestre
+            let lock = this._locker('reader', 'lock')   // Busca obter trava da planilha
+            if (!lock) throw this._log(302)             // Impede a execução caso não consiga
+
+            // Carrega dados de índices de colunas
+            let columnIndexes = this._getColumnIndexes()
+
+            // Obtém dados baseados no modo de operação
+            switch (this._options.mode) {
+
+                case "minimal":
+                    try {
+                        let keys = this._getRowIndexesByKey(true, columnIndexes)            // Obtém keys
+                        this._keys = new Map([...keys.keys()].map(k => [k, "unmodified"]))  // Adiciona keys ao Map mestre
+                    }
+                    catch (e) { throw this._log(500, { message: "Error to get values.", stack: e.stack }) }     // Retorna erros
+                    break;
+
+                case "full":
+
+                    try { this._fetchNewData(true, columnIndexes) }     // Requisita dados
+                    catch (e) { throw this._log(500, { message: "Error to get values.", stack: e.stack }) }   // Retorna erros
+                    break;
+            }
+        }
+
+        // Libera o cadeado
+        finally { this._locker('reader', 'release') }
+
+    }
+
+
+    /**
+     * Gerencia o controle de concorrência da planilha utilizando o padrão Reader-Writer Lock.
+     * * Esta função coordena o acesso simultâneo de múltiplas instâncias do Codex, garantindo que:
+     * 1. Múltiplos leitores possam acessar os dados simultaneamente (Shared Lock).
+     * 2. Um escritor tenha acesso exclusivo, impedindo novas leituras e outras escritas (Exclusive Lock).
+     * 3. Locks órfãos (causados por crashes de instâncias anteriores) sejam limpos automaticamente 
+     * após 6 minutos (Garbage Collection).
+     * * A atomicidade das operações de metadados é garantida pelo uso do `LockService` nativo, 
+     * enquanto o estado do lock é persistido de forma invisível via `DeveloperMetadata`.
+     * * @param {("reader"|"writer")} role - O papel da instância:
+     * - 'reader': Requer acesso para leitura. Permite outros leitores, mas espera por escritores.
+     * - 'writer': Requer acesso para escrita. Exige que não haja nenhum leitor ou escritor ativo.
+     * @param {("lock"|"release")} action - A ação a ser executada:
+     * - 'lock': Tenta adquirir a autorização de acesso (com timeout de aprox. 90 segundos).
+     * - 'release': Libera o acesso e atualiza os contadores de estado.
+     * * @returns {boolean} Retorna `true` se a operação foi concluída com sucesso ou `false` 
+     * em caso de timeout (excesso de tentativas fracassadas).
+     * @private
+     */
+    _locker(role, action) {
+
+        // HELPERS
+
+        /**
+         * Armazena metadados na tabela consultada
+         * @param {string} key Chave para identificação
+         * @param {number|boolean|string|Date} value Valor a armazenar
+         * @private
+         */
+        let setMetadata = (key, value) => {
+            for (let metadata of this._table.createDeveloperMetadataFinder().withKey(key).find()) metadata.remove() // Limpa keys antigas
+            let visibility = SpreadsheetApp.DeveloperMetadataVisibility.PROJECT                                     // Define visibilidade
+            if (value instanceof Date) this._table.addDeveloperMetadata(key, value.toISOString(), visibility)       // Adiciona nova key de data
+            else this._table.addDeveloperMetadata(key, String(value), visibility)                                   // Adiciona nova key regular
+        }
+
+        /**
+         * Consulta metadados na tabela consultada
+         * @param {string} key Chave a consulta
+         * @private
+         */
+        let getMetadata = (key) => {
+
+            // Obtém a primeira key
+            let metadata = this._table.createDeveloperMetadataFinder().withKey(key).find()[0]
+
+            if (!metadata) return undefined     // Retorna indefinido se a key não existe
+            let value = metadata.getValue()     // Obtém valor real
+
+            // Tenta converter como número
+            if (!isNaN(value)) return Number(value)
+
+            // Tenta converter como data
+            let valueAsDate = new Date(value)
+            if (!isNaN(valueAsDate.getTime())) return valueAsDate
+
+            // Tenta converter como bool
+            switch (value) {
+                case "true": return true;    // Retorna bool verdadeiro
+                case "false": return false;   // Retorna bool falso
+            }
+
+            // Retorna valor em string
+            return value
+        }
+
+
+        let completed = false                       // Var para parar o loop 
+        let sendedLog = false                       // Var para não repetir log
+        let failedTries = 0
+        let locker = LockService.getScriptLock()    // Obtém o LockService
+        const k = {
+            age: "Codex_lockerAge",
+            readers: "Codex_readersCount",
+            writing: "Codex_isWriting"
+        }
+
+
+
+        // ETAPA PARA LIMPEZA DE LOCKERS VELHOS
+
+        while (!locker.tryLock(3000)) {         // Tenta obter cadeado do LockService
+            failedTries++;                      // Soma uma tentativa fracassada
+            if (failedTries > 30) return false  // Se mais que 30 tentativas, desistir
+        }
+        let lockerAge = getMetadata(k.age) || new Date(0)   // Obtém idade do locker
+        let now = (new Date()).getTime()                    // Obtém momento atual
+
+        // Se um locker é velho demais, resetar dados
+        if (lockerAge.getTime() < (now - 360000)) {
+            setMetadata(k.readers, 0)
+            setMetadata(k.writing, false)
+        }
+
+        // Renova idade do locker
+        setMetadata(k.age, new Date())
+        locker.releaseLock()
+
+
+
+        // ETAPA PARA LIBERAÇÃO DE USO
+
+        if (action === "release") switch (role) {
+
+            case "reader":
+                while (!locker.tryLock(3000)) {         // Tenta obter cadeado do LockService
+                    failedTries++;                      // Soma uma tentativa fracassada
+                    if (failedTries > 30) return false  // Se mais que 30 tentativas, desistir
                 }
-                catch (e) { throw Error(`${this._log} Error to get values. \n\n${e.stack}`) }     // Retorna erros
-                break;
+                let readersCount = Math.max(0, (getMetadata(k.readers) || 1) - 1)   // Obtém leitores - 1
+                setMetadata(k.readers, readersCount)                                // Grava novos leitores
+                locker.releaseLock()                                                // Destranca cadeado
+                return true;                                                        // Encerra execução
 
-            case "full":
+            case "writer":
+                setMetadata(k.writing, false)   // Define estado de escrita
+                locker.releaseLock()            // Destranca cadeado
+                return true;                    // Encerra execução
+        }
 
-                try { this._fetchNewData(true, columnIndexes) }                                 // Requisita dados
-                catch (e) { throw Error(`${this._log} Error to get values. \n\n${e.stack}`) }   // Retorna erros
-                break;
+
+
+        // ETAPA PARA REQUERER AUTORIZAÇÃO DE USO
+
+        if (action === "lock") while (!completed) {
+
+            // Caso tabela esteja ocupada escrevendo [Checagem 1]
+            if (getMetadata(k.writing)) {
+                if (!sendedLog) { this._log(100); sendedLog = true }    // Avisar que está ocupada
+                Utilities.sleep(3000)                                   // Espera 3 segundos
+                continue;                                               // Tenta de novo
+            }
+
+            while (!locker.tryLock(3000)) {         // Tenta obter cadeado do LockService
+                failedTries++;                      // Soma uma tentativa fracassada
+                if (failedTries > 30) return false  // Se mais que 30 tentativas, desistir
+            }
+
+            let isWriting = getMetadata(k.writing)      // Checa se tabela está ocupada com escrita
+            let readersCount = getMetadata(k.readers)   // Checa se existem leitores
+
+            // Caso tabela esteja ocupada [Checagem 2]
+            if (isWriting || (role === "writer" && readersCount !== 0)) {
+                if (!sendedLog) { this._log(100); sendedLog = true }    // Avisar que está ocupada
+                Utilities.sleep(3000)                                   // Espera 3 segundos
+                locker.releaseLock()                                    // Destranca o cadeado
+                continue;                                               // Tenta de novo
+            }
+
+            // Caso não esteja, para cada modo
+            switch (role) {
+
+                case ("reader"):
+                    readersCount++                          // Adiciona mais um leitor
+                    setMetadata(k.readers, readersCount)    // Salva essa informação
+                    locker.releaseLock()                    // Destranca o cadeado
+                    return true;                            // Libera execução
+
+                case ("writer"):
+
+                    setMetadata(k.writing, true)    // Salva a informação de tranca
+                    return true;                    // Libera execução
+            }
         }
     }
+
+    /**
+     * Emite log, avisos e erros da biblioteca.
+     * * @param {number} code - O código identificador da ocorrência.
+     * @param {*} [info] - Contexto dinâmico para a mensagem. 
+     * * @returns {Error|null} Retorna um objeto `Error` formatado para ser lançado via `throw`,
+     * ou `null` caso a mensagem seja apenas um aviso operacional (`console.warn`).
+     * @private
+     */
+    _log(code, info) {
+
+        // Define prefixo
+        let prefix = `${this._logSign} ${code} -`
+
+        switch (code) {
+
+            // Avisos operacionais
+            case 100: console.warn(`${prefix} Another Codex instance is running an critical task. Awaiting...`); return null;
+
+            // Erros de configuração
+            case 200: return Error(`${prefix} ` +
+                `The "Google Sheets API" Advanced API is not enabled. To use Codex library, you need ` +
+                `to activate it with identifier "Sheets".\n` +
+                `Documentation: https://developers.google.com/apps-script/guides/services/advanced`)
+            case 201: return Error(`${prefix} "sheetID" is not a string.`)
+            case 202: return Error(`${prefix} "tableName" is not a string.`)
+            case 203: return Error(`${prefix} Sheet "${info}" not found.`)
+            case 204: return Error(`${prefix} "keyColumnName" is not a string.`)
+            case 205: return Error(`${prefix} Invalid mode: "${info}".`)
+            case 206: return Error(`${prefix} Column "${info}" is not a string.`)
+
+            // Erros de API
+            case 300: return Error(`${prefix} Failed to load spreadsheet. \n\n${info.stack}`)
+            case 301: return Error(`${prefix} Failed to load sheet/tab. \n\n${info.stack}`)
+            case 302: return Error(`${prefix} Failed to lock sheet.`)
+
+            // Erro desconhecido
+            case 500: return Error(`${prefix} ${info.message || `Unhandled error.`} \n\n${info.stack}`)
+        }
+
+    }
+
 
     /**
      * Mapeia os nomes das colunas da planilha para seus respectivos índices numéricos (0-based).
@@ -1709,7 +1941,7 @@ class Codex {
             if (enableBackup) this._createBackup()
 
 
-            
+
 
             // ETAPA DE MONTAGEM DO OBJETO DE REQUEST
 
@@ -1770,7 +2002,7 @@ class Codex {
                     break;
 
 
-                    
+
                 case 'new':
 
                     data = this._data.get(key)                          // Obtém dados
