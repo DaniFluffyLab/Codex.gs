@@ -435,6 +435,14 @@ class Codex {
             // Erros do usuário ao obter linhas
             case 220: return Error(`${prefix} Unable to get indexes from keys. \n\n${info.stack}`)
 
+            // Erros do usuário ao armazenar dados
+            case 230: return Error(`${prefix} The input contains more than the maximum limit of 50,000 characters in a single cell.`)
+            case 231: return Error(`${prefix} The inputed object contains more than 25 levels of depth.`)
+            case 232: return Error(`${prefix} Maps with not-string or not-number keys are not supported.`)
+            case 233: return Error(`${prefix} The inputed object contains more than 25 levels of depth.`)
+            case 234: return Error(`${prefix} Key values are not editable.`)
+            case 239: return Error(`${prefix} Value ${info} not suported.`)
+
 
 
             // Erros de API no construtor
@@ -444,7 +452,8 @@ class Codex {
 
             // Erros da API avançada
             case 310: return Error(`${prefix} SheetsAPI Error. \n\n${info.stack}`)
-            
+            case 311: return Error(`${prefix} DriveApp Error. \n\n${info.stack}`)
+
 
 
             // Bug na Codex ao obter linhas
@@ -455,14 +464,14 @@ class Codex {
             case 410: return Error(`${prefix} Invalid "requestedKeysOrRows".`)
             case 411: return Error(`${prefix} "requestedKeysOrRows" must be a uniform array of strings (PKs) or numbers (Indexes).`)
             case 412: return Error(`${prefix} "requestedKeysOrRows" must be more than 0 and less than last row index.`)
-            
+
 
             // Erro desconhecido
             case 500: return Error(`${prefix} ${info.message || `Unhandled error.`} \n\n${info.stack}`)
 
 
-            // PAREI NA TYPEJSTOGS
-            
+            // PAREI NA GET
+
         }
 
     }
@@ -868,7 +877,7 @@ class Codex {
 
                 // Avisa o usuário sobre o uso do modo de segurança
                 this._log(101)
-                
+
                 // Obtém dados de key
                 let keyData = SAFEMODE_getValuesByGridRange(this._table, requestedData.get(this._keyColumnName).gridRange).map(([v]) => String(v).trim())
 
@@ -930,7 +939,7 @@ class Codex {
 
                 // Avisa o usuário sobre o uso do modo de segurança
                 this._log(101)
-                
+
                 let mergedRequestedRows = SAFEMODE_mergeGridRanges(requestedData, "ROWS")       // Mescla as requisições
                 let safe_colOffset = Math.min(...columnIndexes.values())                        // Obtém o offset de colunas
                 let safe_keyIndex = columnIndexes.get(this._keyColumnName) - safe_colOffset     // Obtém o índice das keys
@@ -1050,7 +1059,7 @@ class Codex {
 
 
             case 'string':
-                if (value.length > 50000) throw Error(`The input contains more than the maximum limit of 50,000 characters in a single cell.`)
+                if (value.length > 50000) throw this._log(230)
                 return value;
 
             case 'bigint':
@@ -1062,7 +1071,7 @@ class Codex {
                 // Se não compatível com Integer, converter para String
                 if (value > maxint || value < minint) {
                     convertedValue = String(value);
-                    if (convertedValue.length > 50000) throw Error(`The input contains more than the maximum limit of 50,000 characters in a single cell.`)
+                    if (convertedValue.length > 50000) throw this._log(230)
                     if (mode === 'commit') { return convertedValue } else { return value };
                 }
 
@@ -1099,7 +1108,7 @@ class Codex {
                 // REGEX
                 if (value instanceof RegExp) {
                     convertedValue = value.toString()
-                    if (convertedValue.length > 50000) throw Error(`The input contains more than the maximum limit of 50,000 characters in a single cell.`)
+                    if (convertedValue.length > 50000) throw this._log(230)
                     if (mode === 'commit') { return convertedValue }    // Caso commit, envia o regex convertido
                     if (mode === 'clone') { return new RegExp(value) }  // Caso clone, retorna novo regex
                     if (mode === 'test') { return value }               // Caso teste, retorna valor 
@@ -1114,12 +1123,12 @@ class Codex {
 
                     convertedValue = [...value]                                                                         // Cria cópia de segurança
                     if (depth < 25) convertedValue = convertedValue.map(v => this._typeJStoGS(v, 'commit', depth + 1))  // Limpa até 25 camadas
-                    if (depth == 25) throw Error(`The inputed object contains more than 25 levels of depth.`)           // Para de converter acima de 25 camadas
+                    if (depth == 25) throw this._log(231)                                                               // Para de converter acima de 25 camadas
                     if (depth != 0) return convertedValue                                                               // Caso em recursão, retorna valor convertido
 
                     // Valida tamanho da string
                     jsonValue = JSON.stringify(convertedValue)
-                    if (jsonValue.length > 50000) throw Error(`The input contains more than the maximum limit of 50,000 characters in a single cell.`)
+                    if (jsonValue.length > 50000) throw this._log(230)
 
                     // Encerra execução retornando JSON
                     if (mode === 'commit') { return jsonValue }
@@ -1151,16 +1160,16 @@ class Codex {
                     // Obtém o encadeamento chave / valor
                     convertedValue = [...value.entries()]
                     for (let [key] of convertedValue) {
-                        if (typeof key !== 'number' && typeof key !== 'string') throw Error(`Maps with not-string or not-number keys are not supported.`)
+                        if (typeof key !== 'number' && typeof key !== 'string') throw this._log(232)
                     }
 
                     if (depth < 25) convertedValue = convertedValue.map(([k, v]) => [k, this._typeJStoGS(v, 'commit', depth + 1)])  // Limpa até 25 camadas
-                    if (depth == 25) throw Error(`The inputed object contains more than 25 levels of depth.`)                       // Para de converter acima de 25 camadas
+                    if (depth == 25) throw this._log(233)                                                                           // Para de converter acima de 25 camadas
                     if (depth != 0) return Object.fromEntries(convertedValue)                                                       // Caso em recursão, retorna valor convertido
 
                     // Valida tamanho da string
                     jsonValue = JSON.stringify(Object.fromEntries(convertedValue))
-                    if (jsonValue.length > 50000) throw Error(`The input contains more than the maximum limit of 50,000 characters in a single cell.`)
+                    if (jsonValue.length > 50000) throw this._log(230)
 
                     // Encerra execução
                     return jsonValue;
@@ -1191,13 +1200,13 @@ class Codex {
                     convertedValue = Object.entries(value)
 
                     if (depth < 25) convertedValue = convertedValue.map(([k, v]) => [k, this._typeJStoGS(v, 'commit', depth + 1)])  // Limpa até 25 camadas
-                    if (depth == 25) throw Error(`The inputed object contains more than 25 levels of depth.`)                       // Para de converter acima de 25 camadas
+                    if (depth == 25) throw this._log(233)                                                                           // Para de converter acima de 25 camadas
                     if (depth != 0) return Object.fromEntries(convertedValue)                                                       // Caso em recursão, retorna valor convertido
                     convertedValue = Object.fromEntries(convertedValue)                                                             // Fora da recursão, reconverte em objeto    
 
                     // Valida tamanho da string
                     jsonValue = JSON.stringify(convertedValue)
-                    if (jsonValue.length > 50000) throw Error(`The input contains more than the maximum limit of 50,000 characters in a single cell.`)
+                    if (jsonValue.length > 50000) throw this._log(230)
 
                     // Encerra execução
                     if (mode === 'commit') { return jsonValue }     // Caso commit, retorna json
@@ -1219,7 +1228,7 @@ class Codex {
 
 
             default:
-                throw Error(`Value ${value} not supported.`)
+                throw this._log(239, value)
         }
     }
 
@@ -1316,7 +1325,7 @@ class Codex {
             set: (ogObj, colName, value) => {
 
                 // Impede escrita de valores na coluna de keys.
-                if (colName === this._keyColumnName) throw Error(`Key values are not writable.`)
+                if (colName === this._keyColumnName) throw this._log(234)
 
                 let cleanValue = this._typeJStoGS(value)        // Garante que a informação é compatível
                 this._setKeyAs(key, "modified")                 // Marca o objeto como modificado
@@ -1326,7 +1335,7 @@ class Codex {
             deleteProperty: (ogObj, colName) => {
 
                 // Impede escrita de valores na coluna de keys.
-                if (colName === this._keyColumnName) throw Error(`Key values are not deleteable.`)
+                if (colName === this._keyColumnName) throw this._log(234)
 
                 this._setKeyAs(key, "modified")                 // Marca o objeto como modificado
                 return Reflect.deleteProperty(ogObj, colName)   // Deleta o valor no objeto
@@ -1366,7 +1375,7 @@ class Codex {
 
                     // Tipos que não deveriam existir retornam erro
                     default:
-                        throw Error(`Illegal operation.`)
+                        throw this._log(500, { stack: "Illegal operation." })
                 }
             }
         }
@@ -1404,9 +1413,10 @@ class Codex {
                 `Original file: https://drive.google.com/open?id=${this._sheetID}\n` +
                 `Table edited: ${this._tableName}`
             )
-        } catch (e) {
-            throw Error(`Backup failed. ${e.stack}`)
         }
+
+        // Loga erros de API
+        catch (e) { throw this._log(311, e) }
     }
 
 
@@ -1419,15 +1429,13 @@ class Codex {
      */
     clear() {
         try {
-
             this._wipeOnCommit = true;  // Marca planilha para exclusão
             this._keys.clear();         // Limpa histórico de mudanças
             this._data.clear();         // Limpa memória da instancia
-
-        } catch (e) {
-            // Retorna erro.
-            throw Error(`${this._log} ${e.stack}`)
         }
+
+        // Retorna erros não conhecidos
+        catch (e) { throw this._log(500, e) }
     }
 
     /**
@@ -1455,10 +1463,10 @@ class Codex {
                     this._setKeyAs(key, "deleted")  // Marca como deletado
                     return true
             }
-        } catch (e) {
-            // Retorna erro.
-            throw Error(`${this._log} ${e.stack}`)
         }
+
+        // Retorna erros não conhecidos
+        catch (e) { throw this._log(500, e) }
     }
 
     /**
@@ -1468,16 +1476,14 @@ class Codex {
      */
     has(key) {
         try {
-
             let keyStatus = this._keys.get(String(key).trim())  // Obtém estado
             if (keyStatus === undefined) return false           // Se não existe, false
             if (keyStatus === "deleted") return false           // Se deletado, false
             return true                                         // Retorna que existe
-
-        } catch (e) {
-            // Retorna erro.
-            throw Error(`${this._log} ${e.stack}`)
         }
+
+        // Retorna erros não conhecidos
+        catch (e) { throw this._log(500, e) }
     }
 
     /**
