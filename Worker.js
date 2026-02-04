@@ -71,7 +71,7 @@ class Codex {
          * @private
          */
         this._sheetID = sheetId;
-        if (typeof sheetId !== 'string') throw this._log(201)
+        if (typeof sheetId !== 'string') throw this._log(244, this._sheetID)
 
 
 
@@ -92,7 +92,7 @@ class Codex {
          * @private
          */
         this._tableName = tableName;
-        if (typeof tableName !== 'string') throw this._log(202)
+        if (typeof tableName !== 'string') throw this._log(244, this._tableName)
 
 
 
@@ -104,7 +104,7 @@ class Codex {
         this._table;                                                        // Declara variável
         try { this._table = this._sheet.getSheetByName(this._tableName) }   // Carrega página
         catch (e) { throw this._log(301) }                                  // Retorna outros erros
-        if (this._table === null) throw this._log(203, this._tableName)     // Lança erro se não houver página
+        if (this._table === null) throw this._log(201, this._tableName)     // Lança erro se não houver página
 
 
 
@@ -123,7 +123,7 @@ class Codex {
          * @private
          */
         this._keyColumnName = keyColumnName;
-        if (typeof keyColumnName !== 'string') throw this._log(204, this._tableName)
+        if (typeof keyColumnName !== 'string') throw this._log(244, this._tableName)
 
 
 
@@ -142,9 +142,9 @@ class Codex {
             enableTypeInference: options.enableTypeInference ?? true,
         };
         // Testa validade do modo de operação
-        if (this._options.mode !== 'minimal' && this._options.mode !== 'full') throw this._log(205, this._options.mode)
+        if (this._options.mode !== 'minimal' && this._options.mode !== 'full') throw this._log(241, this._options.mode)
         // Testa se colunas são strings
-        for (let c of this._options.columns) { if (typeof c !== 'string') throw this._log(206, c) }
+        for (let c of this._options.columns) { if (typeof c !== 'string') throw this._log(244, c) }
 
 
 
@@ -415,22 +415,18 @@ class Codex {
 
 
 
-            // Erros do usuário no construtor
+            // Erros do usuário do construtor
             case 200: return Error(`${prefix} ` +
                 `The "Google Sheets API" Advanced API is not enabled. To use Codex library, you need ` +
                 `to activate it with identifier "Sheets".\n` +
                 `Documentation: https://developers.google.com/apps-script/guides/services/advanced`)
-            case 201: return Error(`${prefix} "sheetID" is not a string.`)
-            case 202: return Error(`${prefix} "tableName" is not a string.`)
-            case 203: return Error(`${prefix} Sheet "${info}" not found.`)
-            case 204: return Error(`${prefix} "keyColumnName" is not a string.`)
-            case 205: return Error(`${prefix} Invalid mode: "${info}".`)
-            case 206: return Error(`${prefix} Column "${info}" is not a string.`)
+            case 201: return Error(`${prefix} Sheet "${info}" not found.`)
+
 
             // Erros do usuário ao obter colunas
             case 210: return Error(`${prefix} Sheet "${info}" is empty (no headers found).`)
             case 211: return Error(`${prefix} Primary Key column "${info}" does not exist.`)
-            case 212: return Error(`${prefix} Requested column "${info}" do not exist.`)
+            case 212: return Error(`${prefix} Requested column "${info}" does not exist.`)
 
             // Erros do usuário ao obter linhas
             case 220: return Error(`${prefix} Unable to get indexes from keys. \n\n${info.stack}`)
@@ -443,7 +439,15 @@ class Codex {
             case 234: return Error(`${prefix} Key values are not editable.`)
             case 239: return Error(`${prefix} Value ${info} not suported.`)
 
-
+            // Erros do usuário de uso incorreto
+            case 240: return Error(`${prefix} Method ${info} is only avaliable on mode = full. Use Codex.search() instead.`)
+            case 241: return Error(`${prefix} Invalid mode: ${info}`)
+            case 242: return Error(`${prefix} "${info}" is not an literal object.`)
+            case 243: return Error(`${prefix} "${info}" can't be empty.`)
+            case 244: return Error(`${prefix} "${info}" is not a string.`)
+            case 245: return Error(`${prefix} "${info}" is not a regex.`)
+            case 246: return Error(`${prefix} "${info}" is not a regex compatible with Google Sheets.`)
+            case 247: return Error(`${prefix} "${info}" is not a string or a number.`)
 
             // Erros de API no construtor
             case 300: return Error(`${prefix} Failed to load spreadsheet. \n\n${info.stack}`)
@@ -453,6 +457,7 @@ class Codex {
             // Erros da API avançada
             case 310: return Error(`${prefix} SheetsAPI Error. \n\n${info.stack}`)
             case 311: return Error(`${prefix} DriveApp Error. \n\n${info.stack}`)
+            case 312: return Error(`${prefix} TextFinder Error. \n\n${info.stack}`)
 
 
 
@@ -468,9 +473,6 @@ class Codex {
 
             // Erro desconhecido
             case 500: return Error(`${prefix} ${info.message || `Unhandled error.`} \n\n${info.stack}`)
-
-
-            // PAREI NA GET
 
         }
 
@@ -1438,6 +1440,8 @@ class Codex {
         catch (e) { throw this._log(500, e) }
     }
 
+
+
     /**
      * Removes the specified element from the Codex instance by key.
      * Schedules the deletion of the corresponding row in the Google Sheets on the next commit.
@@ -1469,6 +1473,8 @@ class Codex {
         catch (e) { throw this._log(500, e) }
     }
 
+
+
     /**
      * Checks if a specific key exists in the instance.
      * @param {string} key - The unique identifier (ID) to check.
@@ -1486,6 +1492,8 @@ class Codex {
         catch (e) { throw this._log(500, e) }
     }
 
+
+
     /**
      * Retrieves a record by its unique Primary Key.
      * * @param {string|number} key - The unique identifier (ID) of the record.
@@ -1498,23 +1506,36 @@ class Codex {
      * }
      */
     get(key) {
-        try {
 
+        // Define vars
+        let keyStatus, keyLoaded, requestedData
+
+        // Obtém dados da key solicitada
+        try {
             key = String(key).trim()                        // Formata a key
-            let keyStatus = this._keys.get(key)             // Obtém estado da key
+            keyStatus = this._keys.get(key)                 // Obtém estado da key
             if (keyStatus === undefined) return undefined   // Se não existe, encerra
             if (keyStatus === "deleted") return undefined   // Se deletada, encerra
-            let keyLoaded = this._data.has(key)             // Verifica se carregado
-            if (!keyLoaded) this._fetchNewData([key])       // Requisita o load do dado
-            let requestedData = this._data.get(key)         // Carrega o dado em uma var local
-            if (!requestedData) return undefined            // Se não achar, retorna undefined
-            return this._createProxy(requestedData, key)    // Cria proxy do objeto e retorna.
+            keyLoaded = this._data.has(key)                 // Verifica se carregado
+        } catch (e) { throw this._log(500, e) }             // Retorna erros não conhecidos
 
-        } catch (e) {
-            // Retorna erro.
-            throw Error(`${this._log} ${e.stack}`)
-        }
+
+        // Requisita o fetch do dado se não existe
+        if (!keyLoaded) this._fetchNewData([key])
+
+
+        // Carrega o dado
+        try {
+            requestedData = this._data.get(key)     // Carrega o dado em uma var local
+            if (!requestedData) return undefined    // Se não achar, retorna undefined
+        } catch (e) { throw this._log(500, e) }     // Retorna erros não conhecidos
+
+
+        // Cria proxy do objeto e retorna.
+        return this._createProxy(requestedData, key)
     }
+
+
 
     /**
      * Returns a iterator that contains all active Primary Keys in the store.
@@ -1528,11 +1549,10 @@ class Codex {
                 if (status !== "deleted") yield key     // Retorna sob demanda as keys
             }
 
-        } catch (e) {
-            // Retorna erro.
-            throw Error(`${this._log} ${e.stack}`)
-        }
+        } catch (e) { throw this._log(500, e) }     // Retorna erros não conhecidos
     }
+
+
 
     /**
      * Returns a iterator that contains all active values in the store. Only avaliable on mode = full
@@ -1542,18 +1562,12 @@ class Codex {
      * 
      */
     *values() {
-        try {
 
-            // Rejeita uso do método sem estar no modo full.
-            if (this._options.mode != "full") throw Error(`Method Codex.values() is only avaliable on mode = full. Use Codex.search() instead.`)
+        // Rejeita uso do método sem estar no modo full.
+        if (this._options.mode != "full") throw this._log(240, "Codex.values()")
 
-            for (const [key, status] of this._keys) {           // Para cada key
-                if (status !== "deleted") yield this.get(key)   // Retorna sob demanda os valores
-            }
-
-        } catch (e) {
-            // Retorna erro.
-            throw Error(`${this._log} ${e.stack}`)
+        for (const [key, status] of this._keys) {           // Para cada key
+            if (status !== "deleted") yield this.get(key)   // Retorna sob demanda os valores
         }
     }
 
@@ -1565,18 +1579,12 @@ class Codex {
      * 
      */
     *entries() {
-        try {
 
-            // Rejeita uso do método sem estar no modo full.
-            if (this._options.mode != "full") throw Error(`Method Codex.entries() is only avaliable on mode = full. Use Codex.search() instead.`)
+        // Rejeita uso do método sem estar no modo full.
+        if (this._options.mode != "full") throw this._log(240, "Codex.entries()")
 
-            for (const [key, status] of this._keys) {                   // Para cada key
-                if (status !== "deleted") yield [key, this.get(key)]    // Retorna sob demanda as chave/valores
-            }
-
-        } catch (e) {
-            // Retorna erro.
-            throw Error(`${this._log} ${e.stack}`)
+        for (const [key, status] of this._keys) {                   // Para cada key
+            if (status !== "deleted") yield [key, this.get(key)]    // Retorna sob demanda as chave/valores
         }
     }
 
@@ -1618,10 +1626,10 @@ class Codex {
      * }
      */
     *search(mode, search_for) {
-        try {
 
-            // HELPER
-            let match = (value, condition, mode) => {
+        // HELPER
+        let match = (value, condition, mode) => {
+            try {
 
                 // Caso seja um proxy, busca trabalhar com os dados originais
                 if (value && value[this._isCdxProxy]) value = value[this._cdxProxyTarget]
@@ -1659,76 +1667,77 @@ class Codex {
                     case 'partialstring': return convertedValue.toLowerCase().includes(condition.toLowerCase())
                     case 'regex': return condition.test(convertedValue)
                 }
-            }
+            } catch (e) { throw this._log(500, e) }     // Retorna erros desconhecidos
+        }
+
+        // ETAPA DE VALIDAÇÃO
+
+        // Valida o modo de operação
+        if (mode !== "fullstring" && mode !== "partialstring" && mode !== "regex") {
+            throw this._log(241, mode)
+        }
+
+        // Valida se search_for é um objeto
+        if (Object.prototype.toString.call(search_for) !== '[object Object]') {
+            throw this._log(242, "search_for")
+        }
+
+        // Converte para Map, se válido
+        search_for = new Map(Object.entries(search_for))
+
+        // Verifica se search_for é vazio
+        if (search_for.size === 0) {
+            throw this._log(243, "search_for")
+        }
+
+        // Valida valores com base no tipo
+        for (let value of search_for.values()) switch (mode) {
+
+            // Caso string
+            case 'fullstring':
+            case 'partialstring':
+
+                // Valida se é msm uma string
+                if (typeof value !== 'string') throw this._log(244, value)
+                break;
 
 
+            // Caso Regex
+            case 'regex':
 
-            // ETAPA DE VALIDAÇÃO
+                // Valida se é msm um Regex
+                if (!(value instanceof RegExp)) throw this._log(245, value)
 
-            // Valida o modo de operação
-            if (mode !== "fullstring" && mode !== "partialstring" && mode !== "regex") {
-                throw Error(`Invalid mode: ${mode}`)
-            }
+                // Testa a compatibilidade com GSheets
+                try { this._table.getRange(1, 1).createTextFinder(value.source).useRegularExpression(true).findNext() }
+                catch (e) { throw this._log(246, value.source) }
 
-            // Valida se search_for é um objeto
-            if (Object.prototype.toString.call(search_for) !== '[object Object]') {
-                throw Error(`search_for is not an literal object.`)
-            }
+                break;
+        }
 
-            // Converte para Map, se válido
-            search_for = new Map(Object.entries(search_for))
-
-            // Verifica se search_for é vazio
-            if (search_for.size === 0) {
-                throw Error(`search_for can't be empty.`)
-            }
-
-            // Valida valores com base no tipo
-            for (let value of search_for.values()) switch (mode) {
-
-                // Caso string
-                case 'fullstring':
-                case 'partialstring':
-
-                    // Valida se é msm uma string
-                    if (typeof value !== 'string') throw Error(`${value} is not an string.`)
-                    break;
+        // Verifica se tem alguma propriedade inválida
+        for (let key of search_for.keys()) {
+            if (!this._options.columns.has(k)) throw this._log(212, key)
+        }
 
 
-                // Caso Regex
-                case 'regex':
+        // ETAPA DE CACHING (apenas minimal)
 
-                    // Valida se é msm um Regex
-                    if (!(value instanceof RegExp)) throw Error(`${value} is not an regex.`)
+        if (this._options.mode === 'minimal') {
 
-                    // Testa a compatibilidade com GSheets
-                    try { this._table.getRange(1, 1).createTextFinder(value.source).useRegularExpression(true).findNext() }
-                    catch (e) { throw Error(`${value.source} is not an regex compatible with Google Sheets.`) }
+            let lastRow = this._table.getLastRow();         // Obtém última linha
+            if (lastRow < 2) return;                        // Para execução se não tem linhas
 
-                    break;
-            }
+            let columnIndexes = this._getColumnIndexes()    // Obtém índices das colunas
+            let columnRanges = new Map()                    // Prepara para receber ranges das colunas
+            let queries = []                                // Prepara para buscar na planilha
+            let wip = undefined                             // Prepara var para trabalhos em loop
 
-            // Verifica se tem alguma propriedade inválida
-            if (![...search_for.keys()].every(k => this._options.columns.has(k))) {
-                throw Error(`Some properties does not exist in Sheet or constructor.`)
-            }
+            // Converte índice de colunas em ranges
+            for (let [c, i] of columnIndexes) columnRanges.set(c, `R2C${i + 1}:R${lastRow}C${i + 1}`)
 
-
-
-            // ETAPA DE CACHING (apenas minimal)
-
-            if (this._options.mode === 'minimal') {
-
-                let lastRow = this._table.getLastRow();         // Obtém última linha
-                if (lastRow < 2) return;                        // Para execução se não tem linhas
-
-                let columnIndexes = this._getColumnIndexes()    // Obtém índices das colunas
-                let columnRanges = new Map()                    // Prepara para receber ranges das colunas
-                let queries = []                                // Prepara para buscar na planilha
-                let wip = undefined                             // Prepara var para trabalhos em loop
-
-                // Converte índice de colunas em ranges
-                for (let [c, i] of columnIndexes) columnRanges.set(c, `R2C${i + 1}:R${lastRow}C${i + 1}`)
+            // Cria todos os queries
+            try {
 
                 // Para cada filtro solicitado
                 for (let [columnName, filter] of search_for) switch (mode) {
@@ -1790,56 +1799,52 @@ class Codex {
                         break;
                 }
 
-                // Obtém o menor query
-                let smallQuery = queries.reduce((small, actual) => {
-                    return (actual.length < small.length) ? actual : small
-                })
+            } catch (e) { throw this._log(312, e) }  // Retorno erro
 
-                // Limpa var de queries para receber índices
-                queries = []
+            // Obtém o menor query
+            let smallQuery = queries.reduce((small, actual) => {
+                return (actual.length < small.length) ? actual : small
+            })
 
-                // Armazena todos os índices
-                for (let row of smallQuery) queries.push(row.getRow() - 1)
+            // Limpa var de queries para receber índices
+            queries = []
 
-                // Requisita esses dados na memória
-                this._fetchNewData(queries, columnIndexes)
+            // Armazena todos os índices
+            for (let row of smallQuery) queries.push(row.getRow() - 1)
+
+            // Requisita esses dados na memória
+            this._fetchNewData(queries, columnIndexes)
+
+        }
+
+
+
+        // ETAPA DE ITERAÇÃO
+
+        // Para cada valor
+        for (let [key, value] of this._data) {
+
+            // Se key deletada, pular
+            if (this._keys.get(key) === 'deleted') continue
+
+            // Cria var de teste
+            let filterPasses = true
+
+            // Para cada filtro solicitado
+            for (let [colName, condition] of search_for) {
+
+                // Executa um AND com o dado
+                filterPasses = match(value[colName], condition, mode)
+
+                // Se o filtro nõo passar, parar imediatamente
+                if (!filterPasses) break;
             }
 
+            // Se filtro não passou, pular
+            if (!filterPasses) continue
 
-
-
-            // ETAPA DE ITERAÇÃO
-
-            // Para cada valor
-            for (let [key, value] of this._data) {
-
-                // Se key deletada, pular
-                if (this._keys.get(key) === 'deleted') continue
-
-                // Cria var de teste
-                let filterPasses = true
-
-                // Para cada filtro solicitado
-                for (let [colName, condition] of search_for) {
-
-                    // Executa um AND com o dado
-                    filterPasses = match(value[colName], condition, mode)
-
-                    // Se o filtro nõo passar, parar imediatamente
-                    if (!filterPasses) break;
-                }
-
-                // Se filtro não passou, pular
-                if (!filterPasses) continue
-
-                // Devolve resultado ao iterador
-                yield this.get(key)
-            }
-
-
-        } catch (e) {
-            // Retorna erro.
-            throw Error(`${this._log} ${e.stack}`)
+            // Devolve resultado ao iterador
+            yield this.get(key)
         }
     }
 
@@ -1855,37 +1860,32 @@ class Codex {
      * @throws {Error} If the `key` property inside `value` differs from the `key` argument.
      */
     set(key, value) {
-        try {
 
-            // Fase 0 de validação: keys
-            if (typeof key !== 'string' && typeof key !== 'number') { throw Error(`key must be a string or number`) }
-            key = String(key).trim()
+        // Fase 0 de validação: keys
+        if (typeof key !== 'string' && typeof key !== 'number') { throw Error(`key must be a string or number`) }
+        key = String(key).trim()
 
-            // Fase 1 de validação: é um objeto válido?
-            let validValue = this._typeJStoGS(value, 'clone')
-            if (Object.prototype.toString.call(validValue) !== '[object Object]') {
-                throw Error(`Not an literal object.`)
-            }
-
-            // Fase 2 de validação: tem alguma propriedade inválida?
-            if (!Object.keys(validValue).every(k => this._options.columns.has(k))) {
-                throw Error(`Some properties does not exist in Sheet or constructor.`)
-            }
-
-            // Fase 3 de validação: keys no objeto
-            let objKey = validValue[this._keyColumnName]
-            if (objKey === undefined) { validValue[this._keyColumnName] = key }
-            if (validValue[this._keyColumnName] !== key) { throw Error(`Key property can't be different to key argument`) }
-
-            // Insere na array
-            this._data.set(key, validValue)
-            this._setKeyAs(key, "new")
-            return this
-
-        } catch (e) {
-            // Retorna erro.
-            throw Error(`${this._log} ${e.stack}`)
+        // Fase 1 de validação: é um objeto válido?
+        let validValue = this._typeJStoGS(value, 'clone')
+        if (Object.prototype.toString.call(validValue) !== '[object Object]') {
+            throw this._log(247, key)
         }
+
+        // Fase 2 de validação: tem alguma propriedade inválida?
+        for (let key of Object.keys(validValue)) {
+            if (!this._options.columns.has(k)) throw this._log(212, key)
+        }
+
+        // Fase 3 de validação: keys no objeto
+        let objKey = validValue[this._keyColumnName]
+        if (objKey === undefined) { validValue[this._keyColumnName] = key }
+        if (validValue[this._keyColumnName] !== key) { throw this._log(234) }
+
+        // Insere na array
+        this._data.set(key, validValue)
+        this._setKeyAs(key, "new")
+        return this
+
     }
 
     commit(enableBackup = false) {
