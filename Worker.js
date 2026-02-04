@@ -1959,26 +1959,13 @@ class Codex {
             }
         }
 
+        let lock = this._locker('writer', 'lock')   // Busca obter trava da planilha
+        if (!lock) throw this._log(302)             // Impede a execução caso não consiga
 
-
-
-
-        // Var para o cadeado
-        let locker = LockService.getScriptLock()
-        let lockTries = 0
 
         try {
-
-            // Bloqueia a planilha com o servico LockService. Impede outras instâncias de Codex
-            // de escreverem na mesma planilha ao mesmo tempo.
-            while (!locker.tryLock(5000)) {
-                if (lockTries == 1) console.warn(`${this._log} Another instance is using this sheet. Awaiting...`)
-                lockTries++
-            }
-
             // Cria backup caso requisitado
             if (enableBackup) this._createBackup()
-
 
 
 
@@ -2010,10 +1997,8 @@ class Codex {
                 }
             })
 
-
             // Vars do switch
             let rowIndex, data, values, index
-
 
             // Itera sobre os valores
             for (let [key, status] of this._keys) switch (status) {
@@ -2054,8 +2039,8 @@ class Codex {
                         values[index] = value               // Adiciona item na array
                     }
 
-                    requestAdd.push({ "values": values })                   // Armazena valor no array
-                    break;                                                  // Encerra para este item
+                    requestAdd.push({ "values": values })   // Armazena valor no array
+                    break;                                  // Encerra para este item
 
             }
 
@@ -2080,19 +2065,11 @@ class Codex {
             // 6. Destruir as relações de todos os objetos da Codex para o Garbage Collector
             // fazer seu trabalho.
 
-
-
         }
 
-        catch (e) {
-            // Retorna erro.
-            throw Error(`${this._log} ${e.stack}`)
-        }
+        // Libera o cadeado
+        finally { this._locker('reader', 'release') }
 
-        finally {
-            // Libera o cadeado
-            locker.releaseLock()
-        }
 
     }
 
