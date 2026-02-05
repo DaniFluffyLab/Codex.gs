@@ -412,8 +412,8 @@ class Codex {
             // Avisos operacionais
             case 100: console.warn(`${prefix} Another Codex instance is running an critical task. Awaiting...`); return null;
             case 101: console.warn(`${prefix} Too much data, activating safety mode. Consider requesting fewer columns or using minimal mode with Codex.search() to increase speed.`); return null;
-
-
+            case 110: console.warn(`${prefix} "${info.key}": { "${info.colName}": "${info.value}" } ignored: Column "${info.colName}" doesn't exist anymore on table.`); return null;
+            case 111: console.warn(`${prefix} "${info.key}": { "${info.colName}": "${info.value}" } ignored: Row "${info.key}" doesn't exist anymore on table.`); return null;
 
             // Erros do usuário do construtor
             case 200: return Error(`${prefix} ` +
@@ -1983,6 +1983,7 @@ class Codex {
             let lastRow = this._table.getLastRow()
             let requestDelete = []
             let requestAdd = []
+            let requestUpdate = []
 
             // Caso se queira limpar toda a planilha,
             // pré-adiciona um request de exclusão total
@@ -2034,13 +2035,45 @@ class Codex {
 
                     // Para cada coluna
                     for (let [colName, value] of Object.entries(data)) {
-                        value = api_createCellData(value)   // Converte dado para formato da API
-                        index = columnIndexes.get(colName)  // Obtém índice da coluna
-                        values[index] = value               // Adiciona item na array
+                        value = api_createCellData(value)       // Converte dado para formato da API
+                        let index = columnIndexes.get(colName)  // Obtém índice da coluna
+                        values[index] = value                   // Adiciona item na array
                     }
 
                     requestAdd.push({ "values": values })   // Armazena valor no array
                     break;                                  // Encerra para este item
+
+                case 'modified':
+
+                    data = this._data.get(key)  // Obtém dados
+
+                    // Para cada coluna
+                    for (let [colName, value] of Object.entries(data)) {
+                        value = api_createCellData(value)           // Converte dado para formato da API
+                        let indexCol = columnIndexes.get(colName)   // Obtém índice da coluna
+                        let indexRow = rowIndexes.get(key)          // Obtém índice da linha
+
+                        // Caso falhe em obter índices, alertar e ignorar
+                        if (indexCol === undefined) { this._log(110, { key: key, colName: colName, value: value }); continue; }
+                        if (indexRow === undefined) { this._log(111, { key: key, colName: colName, value: value }); continue; }
+
+                        // Adiciona estrutura de dados
+                        requestUpdate.push({
+                            "updateCells": {
+                                "range": {
+                                    "sheetId": this._tableID,
+                                    "startRowIndex": indexRow,
+                                    "endRowIndex": indexRow + 1,
+                                    "startColumnIndex": indexCol,
+                                    "endColumnIndex": indexCol + 1
+                                },
+                                "rows": [{ "values": [value] }],
+                                "fields": "userEnteredValue, userEnteredFormat"
+                            }
+                        })
+                    }
+
+
 
             }
 
