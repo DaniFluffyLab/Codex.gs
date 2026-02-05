@@ -2068,7 +2068,7 @@ class Codex {
         }
 
         // Libera o cadeado
-        finally { this._locker('reader', 'release') }
+        finally { this._locker('writer', 'release') }
 
 
     }
