@@ -1837,7 +1837,7 @@ class Codex {
 
         // Verifica se tem alguma propriedade inválida
         for (let key of search_for.keys()) {
-            if (!this._options.columns.has(k)) throw this._log(212, k)
+            if (!this._options.columns.has(key)) throw this._log(212, key)
         }
 
 
