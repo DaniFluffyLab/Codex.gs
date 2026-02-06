@@ -1,10 +1,3 @@
-/* 
- * Este projeto busca intermediar as comunicações entre o JS e o Google Sheets
- * para otimizar a leitura e escrita do Sheets como uma database. O objetivo é
- * utilizar ua sintaxe análoga ao do processamento dos Maps do JS, mas com 
- * comandos de iniciar e encerrar uma transação.
- */
-
 class Codex {
 
     /**
