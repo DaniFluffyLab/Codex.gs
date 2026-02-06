@@ -470,6 +470,10 @@ class Codex {
             case 411: return Error(`${prefix} "requestedKeysOrRows" must be a uniform array of strings (PKs) or numbers (Indexes).`)
             case 412: return Error(`${prefix} "requestedKeysOrRows" must be more than 0 and less than last row index.`)
 
+            // Bug no Codex por sintaxe incorreta
+            case 420: return Error(`${prefix} Invalid mode: ${info}`)
+            case 421: return Error(`${prefix} Inconsistent values.`)
+
 
             // Erro desconhecido
             case 500: return Error(`${prefix} ${info.message || `Unhandled error.`} \n\n${info.stack}`)
@@ -649,87 +653,69 @@ class Codex {
         }
 
         /**
-         * Agrupa dimensões adjacentes (chunks) para reduzir o número de requisições à API.
-         *
-         * @param {Map<string, {gridRange: Object}>} gridRangesMap Mapa contendo os intervalos individuais de cada dimensão.
-         * @param {"ROWS"|"COLUMNS"} dimension Define a orientação da mesclagem
-         * @returns {Map<string[], {gridRange: Object}>} Mapa com os intervalos fundidos, onde a chave é a lista de nomes das colunas agrupadas.
+         * Agrupa dimensões adjacentes respeitando um limite de segurança, garantindo
+         * que nenhum bloco mesclado exceda o número máximo de chaves originais.
+         * * @param {Map<string, {gridRange: Object}>} gridRangesMap 
+         * @param {"ROWS"|"COLUMNS"} dimension 
+         * @returns {Map<string[], {gridRange: Object}>}
          * @private
          */
         function SAFEMODE_mergeGridRanges(gridRangesMap, dimension) {
 
-            // Variável de tamanho máximo de chunk
+            // Define o tamanho do lote de segurança
             const CHUNK_SIZE = dimension.includes("ROWS") ? 5 : 10
+            const orientation = dimension.includes("ROWS") ? 'rows' : 'columns'
 
-            // Define o nome das propriedades para cada dimensão
-            let startDimensionIndex = dimension.includes("ROWS") ? "startRowIndex" : "startColumnIndex"
-            let endDimensionIndex = dimension.includes("ROWS") ? "endRowIndex" : "endColumnIndex"
-
-
-            // Junta todas as gridRanges na array, mantendo as keys
-            let allGridRanges = []
+            // Converte o Map em Array para mesclagem
+            let rawItems = [];
             gridRangesMap.forEach((data, key) => {
+                rawItems.push({
+                    startRow: data.gridRange.startRowIndex,
+                    endRow: data.gridRange.endRowIndex,
+                    startCol: data.gridRange.startColumnIndex,
+                    endCol: data.gridRange.endColumnIndex,
+                    values: [key]
+                });
+            });
 
-                // Copia o objeto
-                let safeData = { ...data };
-                safeData.gridRange = { ...data.gridRange };
+            // Pré-ordena os itens para fatiar
+            rawItems.sort((a, b) => {
+                switch (orientation) {
+                    case 'columns':
+                        if (a.startRow !== b.startRow) return a.startRow - b.startRow
+                        return a.startCol - b.startCol
+                    case 'rows':
+                        if (a.startCol !== b.startCol) return a.startCol - b.startCol
+                        return a.startRow - b.startRow
+                }
+            });
 
-                // Insere o dado de key e armazena
-                safeData.gridRange.key = key;
-                allGridRanges.push(safeData);
+            let resultMap = new Map();
 
-            })
+            // Fatia e mescla em lotes
+            for (let i = 0; i < rawItems.length; i += CHUNK_SIZE) {
 
-            // Ordena os gridRanges
-            let sortedGridRanges = allGridRanges.sort((a, b) => {
-                return a.gridRange[startDimensionIndex] - b.gridRange[startDimensionIndex]
-            })
+                // Pega um subconjunto seguro
+                let chunk = rawItems.slice(i, i + CHUNK_SIZE);
 
-            // Mesclando gridRanges
-            let mergedGridRanges = new Map()
-            let mergingGridRange = undefined
-            let mergingKeys = undefined
-            while (sortedGridRanges.length != 0) {
+                // Mescla subconjunto
+                let mergedChunk = this._mergeRequests(orientation, chunk);
 
-                // Obtém linha
-                let workingGridRange = sortedGridRanges.shift().gridRange
-
-                // Caso não haja um GridRange atualmente, criar e seguir para próx. loop
-                if (mergingGridRange == undefined) {
-                    mergingGridRange = {
-                        sheetId: workingGridRange.sheetId,
-                        startRowIndex: workingGridRange.startRowIndex,
-                        endRowIndex: workingGridRange.endRowIndex,
-                        startColumnIndex: workingGridRange.startColumnIndex,
-                        endColumnIndex: workingGridRange.endColumnIndex,
+                // Converte o Array mesclado em Map
+                mergedChunk.forEach(item => {
+                    let gridRangeObj = {
+                        sheetId: this._tableID,
+                        startRowIndex: item.startRow,
+                        endRowIndex: item.endRow,
+                        startColumnIndex: item.startCol,
+                        endColumnIndex: item.endCol
                     }
-                    mergingKeys = [workingGridRange.key]
-                    continue;
-                }
-
-                // Mescla vizinhos
-                let validMerge = (mergingGridRange[endDimensionIndex] == workingGridRange[startDimensionIndex])
-                if (validMerge) {
-                    mergingGridRange[endDimensionIndex] = workingGridRange[endDimensionIndex]
-                    mergingKeys.push(workingGridRange.key);
-                }
-
-                // Caso tenha mesclado e atingido o tamanho ou caso não tenha sido mesclado
-                if ((validMerge && mergingKeys.length == CHUNK_SIZE) || (!validMerge)) {
-                    mergedGridRanges.set(mergingKeys, { gridRange: mergingGridRange })
-                    mergingGridRange = undefined
-                    mergingKeys = undefined
-                }
-
-                // Caso não mesclado, guarda para nova iteração
-                if (!validMerge) sortedGridRanges.unshift({ gridRange: workingGridRange })
+                    resultMap.set(item.values, { gridRange: gridRangeObj })
+                })
             }
 
-            // Caso tenha ficado algum objeto pra trás, armazena ele
-            if (mergingGridRange != undefined) mergedGridRanges.set(mergingKeys, { gridRange: mergingGridRange })
-
-            // Retorna objeto mesclado
-            return mergedGridRanges
+            // Retorna resultado
+            return resultMap
         }
 
 
@@ -1422,6 +1408,110 @@ class Codex {
     }
 
 
+    /**
+     * Funde intervalos adjacentes (Horizontais ou Verticais) para requests.
+     * * @param {'columns'|'rows'} orientation - Direção da mesclagem.
+     * @param {Array<{startRow: number, endRow: number, startCol: number, endCol: number, values: Array}>} items 
+     * @returns {Array} Array com os itens mesclados.
+     */
+    _mergeRequests(orientation, items) {
+
+        // Caso não tenha itens, ignorar
+        if (!items || items.length === 0) return [];
+
+        // Verifica se é para usar values
+        let hasValues = (items[0].values !== undefined);
+
+        // Testa consistencia
+        let isConsistent = items.every(item => (item.values !== undefined) === hasValues);
+        if (!isConsistent) throw this._log(421)
+
+        // Ordena os itens com base na regra de orientação
+        switch (orientation) {
+
+            // Ordena por colunas
+            case 'columns':
+                items.sort((a, b) => {
+                    if (a.startRow !== b.startRow) return a.startRow - b.startRow;  // Ordena linhas
+                    return a.startCol - b.startCol;                 // Se mesma linha, ordena colunas
+                }); break;
+
+            // Ordena por linhas
+            case 'rows':
+                items.sort((a, b) => {
+                    if (a.startCol !== b.startCol) return a.startCol - b.startCol;  // Ordena colunas
+                    return a.startRow - b.startRow;                 // Se mesma coluna, ordena linhas
+                }); break;
+
+            // Emite erro de modo inválido
+            default:
+                throw this._log(420, orientation)
+        }
+
+        // Prepara para processamento
+        let merged = [];
+        let prev = null;
+
+        // Para cada item
+        for (let curr of items) {
+
+            // Caso não tenha um item prévio, criar e seguir para próximo loop
+            if (!prev) {
+                prev = { ...curr, values: curr.values ? [...curr.values] : undefined };
+                continue;
+            }
+
+            // Prepara para testar vizinhança
+            let isNeighbor = false;
+
+            // Alterna comportamento entre modos
+            switch (orientation) {
+
+                // Operando por colunas
+                case 'columns':
+                    if (prev.startRow === curr.startRow &&  // Testa se começam na mesma linha
+                        prev.endRow === curr.endRow &&      // Testa se terminam na mesma linha
+                        prev.endCol === curr.startCol       // Testa vizinhança de colunas
+                    ) { isNeighbor = true }
+                    break;
+
+                // Operando por linhas
+                case 'rows':
+                    if (prev.startCol === curr.startCol &&  // Testa se começam na mesma coluna
+                        prev.endCol === curr.endCol &&      // Testa se terminam na mesma coluna
+                        prev.endRow === curr.startRow       // Testa vizinhança de linhas
+                    ) { isNeighbor = true }
+                    break;
+            }
+
+            // Mescla se vizinhos
+            if (isNeighbor) {
+
+                // Estende a coordenada
+                switch (orientation) {
+                    case "columns": prev.endCol = curr.endCol; break;
+                    case "rows": prev.endRow = curr.endRow; break;
+                }
+
+                // Concatena os valores (se existirem)
+                if (hasValues) prev.values.push(...curr.values)
+            }
+
+            // Caso não sejam vizinhos
+            else {
+                merged.push(prev);                                                      // Salva o anterior
+                prev = { ...curr, values: curr.values ? [...curr.values] : undefined }; // Inicia novo
+            }
+        }
+
+        // Salva o último item que sobrou no buffer
+        if (prev) merged.push(prev);
+
+        // Retorna dados mesclados
+        return merged;
+    }
+
+
 
     // MÉTODOS PÚBLICOS
 
@@ -1959,6 +2049,175 @@ class Codex {
             }
         }
 
+        /**
+         * Gera e otimiza o lote de requisições para exclusão física de linhas na planilha.
+         * Esta função processa as chaves marcadas como 'deleted', aplica ordenação decrescente
+         * e funde intervalos vizinhos em um único comando de exclusão de intervalo.
+         * * @param {Map<string, number>} rowIndexes - Mapa contendo a relação atual entre 
+         * as Chaves Primárias (IDs) e seus respectivos índices físicos de linha (0-based).
+         * * @returns {Object[]} Um array de objetos de requisição `deleteDimension` formatados, 
+         * ordenados e otimizados, prontos para serem inseridos no `batchUpdate`.
+         */
+        let api_prepareDeleteRequests = (rowIndexes) => {
+
+            // Armazena valores para mesclagem
+            let rawValues = []
+
+            // Cria os valores de exclusão
+            for (let [key, status] of this._keys) {
+
+                // Ignorar entradas não-validas
+                if (status !== 'deleted') continue
+
+                let rowIndex = rowIndexes.get(key)      // Obtém índice da linha
+                if (rowIndex === undefined) continue;   // Caso essa linha já não exista, ignorar
+
+                // Adiciona o request de exclusão
+                rawValues.push({
+                    startRow: rowIndex,
+                    endRow: rowIndex + 1,
+                    startCol: 0,    // Dummy, apenas para mesclagem
+                    endCol: 0,      // Dummy, apenas para mesclagem
+                })
+            }
+
+            // Mescla linhas
+            let mergedItems = this._mergeRequests('rows', rawValues)
+
+            // Ordena as requisições de forma decrescente
+            mergedItems.sort((a, b) => {
+                return b.startRow - a.startRow
+            })
+
+            // Remapeia valores para encerrar
+            return mergedItems.map(item => ({
+                deleteDimension: {
+                    range: {
+                        sheetId: this._tableID,
+                        dimension: "ROWS",
+                        startIndex: item.startRow,
+                        endIndex: item.endRow
+                    }
+                }
+            }));
+        }
+
+        /**
+         * Gera o objeto de requisição para adicionar novas linhas.
+         * * @param {Map<string, number>} columnIndexes - Mapa contendo a relação entre 
+         * os nomes das colunas (cabeçalhos) e seus índices numéricos (0-based).
+         * * @returns {Object[]} Um array contendo o objeto de comando `appendCells` formatado, 
+         * ou um array vazio caso não haja novos registros.
+         */
+        let api_prepareAddRequests = (columnIndexes) => {
+
+            // Prepara vars para adicionar linhas
+            let requestAdd = []
+
+            // Itera sobre os valores
+            for (let [key, status] of this._keys) {
+
+                // Ignorar entradas não-validas
+                if (status !== 'new') continue
+
+                let data = this._data.get(key)                      // Obtém dados
+                let values = new Array(columnIndexes.size).fill({}) // Prepara para receber os valores
+
+                // Para cada coluna
+                for (let [colName, value] of Object.entries(data)) {
+                    value = api_createCellData(value)       // Converte dado para formato da API
+                    let index = columnIndexes.get(colName)  // Obtém índice da coluna
+
+                    // Caso falhe em obter índices, alertar e ignorar
+                    if (index === undefined) { this._log(110, { key: key, colName: colName, value: value }); continue; }
+
+                    // Adiciona item na array
+                    values[index] = value
+                }
+                requestAdd.push({ "values": values })   // Armazena valor no array
+            }
+
+            // Retorna undefined se está vazio
+            if (requestAdd.length === 0) return []
+            else return [{
+                appendCells: {
+                    sheetId: this._tableID,
+                    rows: requestAdd,
+                    fields: "userEnteredValue, userEnteredFormat"
+                }
+            }]
+        }
+
+        /**
+         * Gera o lote de requisições para atualização de células.
+         * @param {Map<string, number>} columnIndexes - Índices das colunas.
+         * @param {Map<string, number>} rowIndexes - Índices das linhas.
+         * @returns {Object[]} Array de requisições `updateCells`.
+         */
+        let api_prepareUpdateRequests = (columnIndexes, rowIndexes) => {
+
+            // Prepara para receber valores
+            let rawData = []
+
+            // Para cada entrada
+            for (let [key, status] of this._keys) {
+
+                if (status !== 'modified') continue     // Ignorar entradas não-validas
+                data = this._data.get(key)              // Obtém dados
+
+                // Para cada coluna
+                for (let [colName, value] of Object.entries(data)) {
+                    value = api_createCellData(value)           // Converte dado para formato da API
+                    let indexCol = columnIndexes.get(colName)   // Obtém índice da coluna
+                    let indexRow = rowIndexes.get(key)          // Obtém índice da linha
+
+                    // Caso falhe em obter índices, alertar e ignorar
+                    if (indexCol === undefined) { this._log(110, { key: key, colName: colName, value: value }); continue; }
+                    if (indexRow === undefined) { this._log(111, { key: key, colName: colName, value: value }); continue; }
+
+                    // Adiciona estrutura de dados
+                    rawData.push({
+                        startRow: indexRow,
+                        endRow: indexRow + 1,
+                        startCol: indexCol,
+                        endCol: indexCol + 1,
+                        values: [value]
+                    })
+                }
+            }
+
+            // Mescla colunas
+            let mergedColumns = this._mergeRequests('columns', rawData)
+
+            // Prepara linha para API
+            let rowReadyForAPI = mergedColumns.map(data => ({
+                ...data,
+                values: [{ values: data.values }]
+            }))
+
+            // Mescla linhas
+            let mergedRows = this._mergeRequests('rows', rowReadyForAPI)
+
+            // Retorna valor construído para API
+            return mergedRows.map(item => ({
+                updateCells: {
+                    range: {
+                        sheetId: this._tableID,
+                        startRowIndex: item.startRow,
+                        endRowIndex: item.endRow,
+                        startColumnIndex: item.startCol,
+                        endColumnIndex: item.endCol
+                    },
+                    rows: item.values,
+                    fields: "userEnteredValue,userEnteredFormat"
+                }
+            }));
+        }
+
+
+
+
+
         let lock = this._locker('writer', 'lock')   // Busca obter trava da planilha
         if (!lock) throw this._log(302)             // Impede a execução caso não consiga
 
@@ -1981,13 +2240,15 @@ class Codex {
             let rowIndexes = this._getRowIndexesByKey([...this._keys.keys()])
             let columnIndexes = this._getColumnIndexes()
             let lastRow = this._table.getLastRow()
+
+            // Prepara para obter requests
             let requestDelete = []
             let requestAdd = []
             let requestUpdate = []
 
             // Caso se queira limpar toda a planilha,
-            // pré-adiciona um request de exclusão total
-            if (this._wipeOnCommit) requestDelete.push({
+            // adiciona um request de exclusão total
+            if (this._wipeOnCommit) requestDelete.unshift({
                 deleteDimension: {
                     range: {
                         sheetId: this._tableID,
@@ -1998,96 +2259,17 @@ class Codex {
                 }
             })
 
-            // Vars do switch
-            let rowIndex, data, values, index
-
-            // Itera sobre os valores
-            for (let [key, status] of this._keys) switch (status) {
-
-
-
-                case 'deleted':
-
-                    rowIndex = rowIndexes.get(key)      // Obtém índice da linha
-                    if (rowIndex === undefined) break;  // Caso essa linha já não exista, ignorar
-
-                    // Adiciona o request de exclusão
-                    requestDelete.push({
-                        deleteDimension: {
-                            range: {
-                                sheetId: this._tableID,
-                                dimension: "ROWS",
-                                startIndex: rowIndex,
-                                endIndex: rowIndex + 1
-                            }
-                        }
-                    })
-
-                    // Encerra para este item
-                    break;
-
-
-
-                case 'new':
-
-                    data = this._data.get(key)                          // Obtém dados
-                    values = new Array(columnIndexes.size).fill({})     // Prepara para receber os valores
-
-                    // Para cada coluna
-                    for (let [colName, value] of Object.entries(data)) {
-                        value = api_createCellData(value)       // Converte dado para formato da API
-                        let index = columnIndexes.get(colName)  // Obtém índice da coluna
-                        values[index] = value                   // Adiciona item na array
-                    }
-
-                    requestAdd.push({ "values": values })   // Armazena valor no array
-                    break;                                  // Encerra para este item
-
-                case 'modified':
-
-                    data = this._data.get(key)  // Obtém dados
-
-                    // Para cada coluna
-                    for (let [colName, value] of Object.entries(data)) {
-                        value = api_createCellData(value)           // Converte dado para formato da API
-                        let indexCol = columnIndexes.get(colName)   // Obtém índice da coluna
-                        let indexRow = rowIndexes.get(key)          // Obtém índice da linha
-
-                        // Caso falhe em obter índices, alertar e ignorar
-                        if (indexCol === undefined) { this._log(110, { key: key, colName: colName, value: value }); continue; }
-                        if (indexRow === undefined) { this._log(111, { key: key, colName: colName, value: value }); continue; }
-
-                        // Adiciona estrutura de dados
-                        requestUpdate.push({
-                            "updateCells": {
-                                "range": {
-                                    "sheetId": this._tableID,
-                                    "startRowIndex": indexRow,
-                                    "endRowIndex": indexRow + 1,
-                                    "startColumnIndex": indexCol,
-                                    "endColumnIndex": indexCol + 1
-                                },
-                                "rows": [{ "values": [value] }],
-                                "fields": "userEnteredValue, userEnteredFormat"
-                            }
-                        })
-                    }
-
-
+            // Caso não tenha Wipe, adiciona requests normais de update e exclusão
+            if (!this._wipeOnCommit) {
+                requestDelete = api_prepareDeleteRequests(rowIndexes)
+                requestUpdate = api_prepareUpdateRequests(columnIndexes, rowIndexes)
 
             }
 
+            // Adiciona requests de novas linhas em ambos os casos
+            requestAdd = api_prepareAddRequests(columnIndexes)
 
             // PRÓXIMOS PASSOS
-
-            // 0. Separar todas as funções que vão criar esse request em helpers.
-
-            // 1. Fazer um switch para montar o request de adicionar linhas,
-            //  remover linhas ou atualizar linhas com base no estado da key.
-
-            // 2. Ordenar todas os requests na ordem que serão chamados, de baixo para cima.
-
-            // 3. Concatenar requests próximos e concomitantes
 
             // 4. Definir um limite de estouro da API, o ponto onde o request vai ser grande
             // demais e pode falhar para subdividi-lo
