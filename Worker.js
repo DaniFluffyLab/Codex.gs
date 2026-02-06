@@ -42,7 +42,7 @@ class Codex {
      *     columns: ["Stock", "Description"]
      * });
      */
-    constructor(sheetId, tableName, keyColumnName, options) {
+    constructor(sheetId, tableName, keyColumnName, options = {}) {
 
 
 
@@ -191,6 +191,13 @@ class Codex {
          */
         this._wipeOnCommit = false;
 
+        /**
+         * Marca se instância já foi commitada.
+         * @type {boolean}
+         * @private
+         */
+        this._commited = false
+
 
 
         // FASE 1: INICIA O CONSTRUTOR
@@ -295,8 +302,7 @@ class Codex {
         }
 
 
-        let completed = false                       // Var para parar o loop 
-        let sendedLog = false                       // Var para não repetir log
+        let sentLog = false                       // Var para não repetir log
         let failedTries = 0
         let locker = LockService.getScriptLock()    // Obtém o LockService
         const k = {
@@ -352,11 +358,11 @@ class Codex {
 
         // ETAPA PARA REQUERER AUTORIZAÇÃO DE USO
 
-        if (action === "lock") while (!completed) {
+        if (action === "lock") while (true) {
 
             // Caso tabela esteja ocupada escrevendo [Checagem 1]
             if (getMetadata(k.writing)) {
-                if (!sendedLog) { this._log(100); sendedLog = true }    // Avisar que está ocupada
+                if (!sentLog) { this._log(100); sentLog = true }    // Avisar que está ocupada
                 Utilities.sleep(3000)                                   // Espera 3 segundos
                 continue;                                               // Tenta de novo
             }
@@ -371,7 +377,7 @@ class Codex {
 
             // Caso tabela esteja ocupada [Checagem 2]
             if (isWriting || (role === "writer" && readersCount !== 0)) {
-                if (!sendedLog) { this._log(100); sendedLog = true }    // Avisar que está ocupada
+                if (!sentLog) { this._log(100); sentLog = true }    // Avisar que está ocupada
                 Utilities.sleep(3000)                                   // Espera 3 segundos
                 locker.releaseLock()                                    // Destranca o cadeado
                 continue;                                               // Tenta de novo
@@ -410,10 +416,13 @@ class Codex {
         switch (code) {
 
             // Avisos operacionais
-            case 100: console.warn(`${prefix} Another Codex instance is running an critical task. Awaiting...`); return null;
+            case 100: console.warn(`${prefix} Another Codex instance is running a critical task. Awaiting...`); return null;
             case 101: console.warn(`${prefix} Too much data, activating safety mode. Consider requesting fewer columns or using minimal mode with Codex.search() to increase speed.`); return null;
+            case 102: console.warn(`${prefix} Duplicate header found: ${info}`); return null;
             case 110: console.warn(`${prefix} "${info.key}": { "${info.colName}": "${info.value}" } ignored: Column "${info.colName}" doesn't exist anymore on table.`); return null;
             case 111: console.warn(`${prefix} "${info.key}": { "${info.colName}": "${info.value}" } ignored: Row "${info.key}" doesn't exist anymore on table.`); return null;
+            case 120: console.log(`${prefix} Committing...`); return null;
+            case 121: console.log(`${prefix} No changes detected, nothing to commit.`); return null;
 
             // Erros do usuário do construtor
             case 200: return Error(`${prefix} ` +
@@ -433,21 +442,25 @@ class Codex {
 
             // Erros do usuário ao armazenar dados
             case 230: return Error(`${prefix} The input contains more than the maximum limit of 50,000 characters in a single cell.`)
-            case 231: return Error(`${prefix} The inputed object contains more than 25 levels of depth.`)
+            case 231: return Error(`${prefix} The input object contains more than 25 levels of depth.`)
             case 232: return Error(`${prefix} Maps with not-string or not-number keys are not supported.`)
-            case 233: return Error(`${prefix} The inputed object contains more than 25 levels of depth.`)
             case 234: return Error(`${prefix} Key values are not editable.`)
-            case 239: return Error(`${prefix} Value ${info} not suported.`)
+            case 239: return Error(`${prefix} Value ${info} not supported.`)
 
             // Erros do usuário de uso incorreto
-            case 240: return Error(`${prefix} Method ${info} is only avaliable on mode = full. Use Codex.search() instead.`)
+            case 240: return Error(`${prefix} Method ${info} is only available on mode = full. Use Codex.search() instead.`)
             case 241: return Error(`${prefix} Invalid mode: ${info}`)
-            case 242: return Error(`${prefix} "${info}" is not an literal object.`)
+            case 242: return Error(`${prefix} "${info}" is not a literal object.`)
             case 243: return Error(`${prefix} "${info}" can't be empty.`)
             case 244: return Error(`${prefix} "${info}" is not a string.`)
             case 245: return Error(`${prefix} "${info}" is not a regex.`)
             case 246: return Error(`${prefix} "${info}" is not a regex compatible with Google Sheets.`)
             case 247: return Error(`${prefix} "${info}" is not a string or a number.`)
+
+            // Erro de usuário ao interagir com Codex commitado
+            case 250: return Error(`${prefix} Unable to execute action: This instance has been already committed.`)
+
+
 
             // Erros de API no construtor
             case 300: return Error(`${prefix} Failed to load spreadsheet. \n\n${info.stack}`)
@@ -462,8 +475,8 @@ class Codex {
 
 
             // Bug na Codex ao obter linhas
-            case 400: return Error(`${prefix} Invalid requestedKeys.`)
-            case 401: return Error(`${prefix} Error locating keyColumn: \n\n${info.stack}`)
+            case 400: return Error(`${prefix} Invalid "requestedKeys".`)
+            case 401: return Error(`${prefix} Error locating "keyColumn": \n\n${info.stack}`)
 
             // Bug na Codex ao carregar dados
             case 410: return Error(`${prefix} Invalid "requestedKeysOrRows".`)
@@ -482,7 +495,6 @@ class Codex {
 
     }
 
-
     /**
      * Mapeia os nomes das colunas da planilha para seus respectivos índices numéricos (0-based).
      * Realiza a leitura do cabeçalho (linha 1) e valida as colunas solicitadas nas configurações, 
@@ -493,7 +505,7 @@ class Codex {
      */
     _getColumnIndexes() {
 
-        let columnIndexes;                                              // Cria var para índices das colunas
+        let columnIndexes = new Map();                                  // Cria var para índices das colunas
         let lastColumn = this._table.getLastColumn()                    // Obtém última coluna
 
         // Lança erro se aba completamente vazia
@@ -501,7 +513,13 @@ class Codex {
 
         let columnArray = this._table.getRange(1, 1, 1, lastColumn)     // Seleciona cabeçalho
             .getValues()[0]                                             // Obtém dados
-        columnIndexes = new Map(columnArray.map((v, i) => [v, i]))      // Insere dados dos índices no Map
+
+        columnArray.forEach((header, index) => {
+            if (header === undefined || header === null || header === "") return    // Ignora headers vazias
+            let normalizedHeader = String(header).trim()                            // Normaliza header
+            if (columnIndexes.has(normalizedHeader)) this._log(102)                 // Avisa se header duplicada
+            columnIndexes.set(normalizedHeader, index)                              // Insere dados dos índices no Map
+        })
 
         // Valida a existência de uma coluna de keys
         if (!columnIndexes.has(this._keyColumnName)) { throw this._log(211, this._keyColumnName); }
@@ -563,7 +581,8 @@ class Codex {
                 return rowIndexes                                                       // Encerra execução
             }
 
-            if (lastRow >= 2) { // Se planilha não está vazia
+            // Se planilha não está vazia
+            if (lastRow >= 2) {
 
                 // Efetua request na API
                 let keys_rawValues = Sheets.Spreadsheets.Values.batchGetByDataFilter(
@@ -590,9 +609,11 @@ class Codex {
                     if (mode === "FULL" || requestedKeys.has(trimKey)) rowIndexes.set(trimKey, i + 1)   // Armazena keys com índice
                 })
 
-                // Encerra execução
-                return rowIndexes
             }
+
+            // Encerra execução
+            return rowIndexes
+
         } catch (e) { throw this._log(220, e) }  // Retorna outros erros
     }
 
@@ -622,7 +643,7 @@ class Codex {
          * * @returns {any[[]]} Um array contendo todos os valores do intervalo solicitado.
          * @private
          */
-        function SAFEMODE_getValuesByGridRange(table, gridRange) {
+        let SAFEMODE_getValuesByGridRange = (table, gridRange) => {
             try {
 
                 // Tenta requerer a API avançada
@@ -660,7 +681,7 @@ class Codex {
          * @returns {Map<string[], {gridRange: Object}>}
          * @private
          */
-        function SAFEMODE_mergeGridRanges(gridRangesMap, dimension) {
+        let SAFEMODE_mergeGridRanges = (gridRangesMap, dimension) => {
 
             // Define o tamanho do lote de segurança
             const CHUNK_SIZE = dimension.includes("ROWS") ? 5 : 10
@@ -1152,7 +1173,7 @@ class Codex {
                     }
 
                     if (depth < 25) convertedValue = convertedValue.map(([k, v]) => [k, this._typeJStoGS(v, 'commit', depth + 1)])  // Limpa até 25 camadas
-                    if (depth == 25) throw this._log(233)                                                                           // Para de converter acima de 25 camadas
+                    if (depth == 25) throw this._log(231)                                                                           // Para de converter acima de 25 camadas
                     if (depth != 0) return Object.fromEntries(convertedValue)                                                       // Caso em recursão, retorna valor convertido
 
                     // Valida tamanho da string
@@ -1188,7 +1209,7 @@ class Codex {
                     convertedValue = Object.entries(value)
 
                     if (depth < 25) convertedValue = convertedValue.map(([k, v]) => [k, this._typeJStoGS(v, 'commit', depth + 1)])  // Limpa até 25 camadas
-                    if (depth == 25) throw this._log(233)                                                                           // Para de converter acima de 25 camadas
+                    if (depth == 25) throw this._log(231)                                                                           // Para de converter acima de 25 camadas
                     if (depth != 0) return Object.fromEntries(convertedValue)                                                       // Caso em recursão, retorna valor convertido
                     convertedValue = Object.fromEntries(convertedValue)                                                             // Fora da recursão, reconverte em objeto    
 
@@ -1397,7 +1418,7 @@ class Codex {
             let bkpFile = thisFile.makeCopy(bkpName, bkpFolder)
             bkpFile.setDescription(
                 "[CODEX BACKUP]\n" +
-                `Date/Time: ${now} ${timeZone}` +
+                `Date/Time: ${now} ${timeZone}\n` +
                 `Original file: https://drive.google.com/open?id=${this._sheetID}\n` +
                 `Table edited: ${this._tableName}`
             )
@@ -1406,7 +1427,6 @@ class Codex {
         // Loga erros de API
         catch (e) { throw this._log(311, e) }
     }
-
 
     /**
      * Funde intervalos adjacentes (Horizontais ou Verticais) para requests.
@@ -1520,6 +1540,10 @@ class Codex {
      * of the spreadsheet on the next commit.
      */
     clear() {
+
+        // Impede execução caso commitado
+        if (this._commited) throw this._log(250)
+
         try {
             this._wipeOnCommit = true;  // Marca planilha para exclusão
             this._keys.clear();         // Limpa histórico de mudanças
@@ -1530,8 +1554,6 @@ class Codex {
         catch (e) { throw this._log(500, e) }
     }
 
-
-
     /**
      * Removes the specified element from the Codex instance by key.
      * Schedules the deletion of the corresponding row in the Google Sheets on the next commit.
@@ -1539,6 +1561,10 @@ class Codex {
      * @returns {boolean} `true` if an element in the Codex object existed and has been removed, or `false` if the element does not exist.
      */
     delete(key) {
+
+        // Impede execução caso commitado
+        if (this._commited) throw this._log(250)
+
         try {
 
             key = String(key).trim()          // Formata key
@@ -1563,14 +1589,16 @@ class Codex {
         catch (e) { throw this._log(500, e) }
     }
 
-
-
     /**
      * Checks if a specific key exists in the instance.
      * @param {string} key - The unique identifier (ID) to check.
      * @returns {boolean} `true` if the key exists and is active; `false` otherwise.
      */
     has(key) {
+
+        // Impede execução caso commitado
+        if (this._commited) throw this._log(250)
+
         try {
             let keyStatus = this._keys.get(String(key).trim())  // Obtém estado
             if (keyStatus === undefined) return false           // Se não existe, false
@@ -1581,8 +1609,6 @@ class Codex {
         // Retorna erros não conhecidos
         catch (e) { throw this._log(500, e) }
     }
-
-
 
     /**
      * Retrieves a record by its unique Primary Key.
@@ -1597,35 +1623,29 @@ class Codex {
      */
     get(key) {
 
+        // Impede execução caso commitado
+        if (this._commited) throw this._log(250)
+
         // Define vars
         let keyStatus, keyLoaded, requestedData
 
         // Obtém dados da key solicitada
-        try {
-            key = String(key).trim()                        // Formata a key
-            keyStatus = this._keys.get(key)                 // Obtém estado da key
-            if (keyStatus === undefined) return undefined   // Se não existe, encerra
-            if (keyStatus === "deleted") return undefined   // Se deletada, encerra
-            keyLoaded = this._data.has(key)                 // Verifica se carregado
-        } catch (e) { throw this._log(500, e) }             // Retorna erros não conhecidos
-
+        key = String(key).trim()                        // Formata a key
+        keyStatus = this._keys.get(key)                 // Obtém estado da key
+        if (keyStatus === undefined) return undefined   // Se não existe, encerra
+        if (keyStatus === "deleted") return undefined   // Se deletada, encerra
+        keyLoaded = this._data.has(key)                 // Verifica se carregado
 
         // Requisita o fetch do dado se não existe
         if (!keyLoaded) this._fetchNewData([key])
 
-
         // Carrega o dado
-        try {
-            requestedData = this._data.get(key)     // Carrega o dado em uma var local
-            if (!requestedData) return undefined    // Se não achar, retorna undefined
-        } catch (e) { throw this._log(500, e) }     // Retorna erros não conhecidos
-
+        requestedData = this._data.get(key)     // Carrega o dado em uma var local
+        if (!requestedData) return undefined    // Se não achar, retorna undefined
 
         // Cria proxy do objeto e retorna.
         return this._createProxy(requestedData, key)
     }
-
-
 
     /**
      * Returns a iterator that contains all active Primary Keys in the store.
@@ -1633,6 +1653,10 @@ class Codex {
      * @returns {IterableIterator<string>} An iterable iterator of non-deleted keys.
      */
     *keys() {
+
+        // Impede execução caso commitado
+        if (this._commited) throw this._log(250)
+
         try {
 
             for (const [key, status] of this._keys) {   // Para cada key
@@ -1642,16 +1666,17 @@ class Codex {
         } catch (e) { throw this._log(500, e) }     // Retorna erros não conhecidos
     }
 
-
-
     /**
-     * Returns a iterator that contains all active values in the store. Only avaliable on mode = full
-     * * @yields {string} The next active value.
+     * Returns a iterator that contains all active values in the store. Only available on mode = full
+     * * @yields {object} The next active value.
      * @returns {IterableIterator<object>} An iterable iterator of non-deleted values.
      * @throws {Error} If Codex is not in mode = full.
      * 
      */
     *values() {
+
+        // Impede execução caso commitado
+        if (this._commited) throw this._log(250)
 
         // Rejeita uso do método sem estar no modo full.
         if (this._options.mode != "full") throw this._log(240, "Codex.values()")
@@ -1662,13 +1687,16 @@ class Codex {
     }
 
     /**
-     * Returns a iterator that contains all active entries in the store. Only avaliable on mode = full
+     * Returns a iterator that contains all active entries in the store. Only available on mode = full
      * * @yields {string} The next active entries.
-     * @returns {IterableIterator<[string, object]>} An iterable iterator of non-deleted entries.
+     * @returns {IterableIterator<[string, Object]>} An iterable iterator of non-deleted entries.
      * @throws {Error} If Codex is not in mode = full.
      * 
      */
     *entries() {
+
+        // Impede execução caso commitado
+        if (this._commited) throw this._log(250)
 
         // Rejeita uso do método sem estar no modo full.
         if (this._options.mode != "full") throw this._log(240, "Codex.entries()")
@@ -1677,7 +1705,6 @@ class Codex {
             if (status !== "deleted") yield [key, this.get(key)]    // Retorna sob demanda as chave/valores
         }
     }
-
 
     /**
      * Performs a structured search across the dataset using a specific matching strategy.
@@ -1716,6 +1743,9 @@ class Codex {
      * }
      */
     *search(mode, search_for) {
+
+        // Impede execução caso commitado
+        if (this._commited) throw this._log(250)
 
         // HELPER
         let match = (value, condition, mode) => {
@@ -1807,7 +1837,7 @@ class Codex {
 
         // Verifica se tem alguma propriedade inválida
         for (let key of search_for.keys()) {
-            if (!this._options.columns.has(k)) throw this._log(212, key)
+            if (!this._options.columns.has(k)) throw this._log(212, k)
         }
 
 
@@ -1938,7 +1968,6 @@ class Codex {
         }
     }
 
-
     /**
      * Adds or updates a record in the local memory, staging it for the next transaction commit.
      * @param {string|number} key - The Primary Key for the record.
@@ -1951,6 +1980,9 @@ class Codex {
      */
     set(key, value) {
 
+        // Impede execução caso commitado
+        if (this._commited) throw this._log(250)
+
         // Fase 0 de validação: keys
         if (typeof key !== 'string' && typeof key !== 'number') { throw Error(`key must be a string or number`) }
         key = String(key).trim()
@@ -1958,12 +1990,12 @@ class Codex {
         // Fase 1 de validação: é um objeto válido?
         let validValue = this._typeJStoGS(value, 'clone')
         if (Object.prototype.toString.call(validValue) !== '[object Object]') {
-            throw this._log(247, key)
+            throw this._log(242, key)
         }
 
         // Fase 2 de validação: tem alguma propriedade inválida?
         for (let key of Object.keys(validValue)) {
-            if (!this._options.columns.has(k)) throw this._log(212, key)
+            if (!this._options.columns.has(key)) throw this._log(212, key)
         }
 
         // Fase 3 de validação: keys no objeto
@@ -1978,7 +2010,18 @@ class Codex {
 
     }
 
+    /**
+     * Synchronizes all local changes to the remote Google Sheets file and clear the memory.
+     * * @param {boolean} [enableBackup=false] - If set to `true`, creates a timestamped duplicate of the sheet before applying changes.
+     * @throws {Error} [Code 250] If the instance has already been committed (prevents double-submission).
+     * @throws {Error} [Code 302] If the write lock cannot be acquired.
+     * @throws {Error} [Code 310] If the Google Sheets API `batchUpdate` fails for any batch.
+     * @returns {void}
+     */
     commit(enableBackup = false) {
+
+        // Impede execução caso commitado
+        if (this._commited) throw this._log(250)
 
         // HELPERS
 
@@ -2163,7 +2206,7 @@ class Codex {
             for (let [key, status] of this._keys) {
 
                 if (status !== 'modified') continue     // Ignorar entradas não-validas
-                data = this._data.get(key)              // Obtém dados
+                let data = this._data.get(key)          // Obtém dados
 
                 // Para cada coluna
                 for (let [colName, value] of Object.entries(data)) {
@@ -2213,6 +2256,45 @@ class Codex {
                 }
             }));
         }
+
+        /**
+         * Divide um array de requisições em lotes menores para respeitar
+         * o limite de memória e payload da API do Google Sheets.
+         * * @param {Object[]} payLoad - Array contendo todas as requisições geradas.
+         * @returns {Object[][]} Um array de arrays (lotes de requisições).
+         */
+        let api_splitPayload = (payLoad) => {
+
+            let receivedPayloads = [...payLoad]
+            let allPayloads = []                // Buffer de todos os payloads
+            let prevPayload = []                // Buffer de apenas o payload atual
+            let lengthPrevPayload = 0           // Avalia o tamanho do payload
+            let limitLengthPayload = 5000000    // Limita o payload a 5MB
+
+            for (let curr of receivedPayloads) {
+
+                // Obtém tamanho
+                let json = JSON.stringify(curr)
+                let potentialLength = lengthPrevPayload + json.length
+
+                // Se tamanho vai exceder
+                if (potentialLength > limitLengthPayload) {
+                    allPayloads.push(prevPayload)   // Armazena anterior ao buffer de retorno
+                    prevPayload = []                // Reseta buffer
+                    lengthPrevPayload = 0           // Zera counter de tamanho
+                }
+
+                prevPayload.push(curr)              // Adiciona payLoad ao buffer
+                lengthPrevPayload += json.length    // Adiciona tamanho ao counter
+            }
+
+            // Garante buffer limpo
+            if (prevPayload.length !== 0) allPayloads.push(prevPayload)
+
+            // Retorna payloads divididos
+            return allPayloads
+        }
+
 
 
 
@@ -2269,16 +2351,31 @@ class Codex {
             // Adiciona requests de novas linhas em ambos os casos
             requestAdd = api_prepareAddRequests(columnIndexes)
 
-            // PRÓXIMOS PASSOS
+            // Junta todas as requests na ordem que precisam ser chamadas
+            let fullRequests = [...requestUpdate, ...requestDelete, ...requestAdd]
 
-            // 4. Definir um limite de estouro da API, o ponto onde o request vai ser grande
-            // demais e pode falhar para subdividi-lo
+            // Se há requisições
+            if (fullRequests.length !== 0) {
 
-            // 5. Efetuar o request e ver se deu certo (ele é atômico, então se algo der
-            // errado nenhuma edição é feita), e se não deu, como tratar
+                let splittedPayloads = api_splitPayload(fullRequests)   // Divide o payload em chunks seguras
+                this._log(120)                                          // Notifica o commit
 
-            // 6. Destruir as relações de todos os objetos da Codex para o Garbage Collector
-            // fazer seu trabalho.
+                // Executa os requests à API
+                for (let [index, payload] of splittedPayloads.entries()) {
+
+                    try { Sheets.Spreadsheets.batchUpdate({ requests: payload }, this._sheetID) }
+                    catch (e) { throw this._log(310, e) }
+
+                }
+            }
+            // Loga aviso de commit vazio
+            else { this._log(121) }
+
+
+            // Limpa memória
+            this._data.clear()
+            this._keys.clear()
+            this._commited = true
 
         }
 
