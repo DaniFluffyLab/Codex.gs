@@ -1,3 +1,7 @@
+// CODEX.GS v0.1- https://codex.danifluffy.dev
+// Library to manage spreadsheets with an ORM correlated to JS Maps.
+// Created by danifluffy.dev
+
 class Codex {
 
     /**
