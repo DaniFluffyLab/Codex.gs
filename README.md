@@ -1,7 +1,7 @@
 # Codex.gs
 
-> [!CAUTION]
-> Apesar da Codex estar tecnicamente funcional, este projeto está sendo ativamente testado e corrigido bugs, e deve ser tratado como **pré-alpha**. Espere todo tipo de erro no momento, e **NÃO UTILIZE EM AMBIENTE DE PRODUÇÃO**.
+> [!WARNING]
+> A biblioteca Codex está tecnicamente funcional, mas este projeto ainda está sendo ativamente testado e corrigido bugs, portanto **cuidado ao utilizar em sistemas em produção**. Caso você encontre algum bug, fique à vontade para abrir uma issue!
 
 **Codex.gs** é uma biblioteca do Google Apps Script (GAS) para manipular uma planilha do Google Sheets de forma análoga a um [Map do Javascript](https://developer.mozilla.org/pt-BR/docs/Web/JavaScript/Reference/Global_Objects/Map). Ao criar um objeto Codex, você pode manipular sua planilha por pares de chave-objeto, que representam as linhas da planilha, e onde cada propriedade do objeto representa uma coluna.
 
