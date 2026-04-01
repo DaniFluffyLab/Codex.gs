@@ -1,4 +1,4 @@
-// CODEX.GS v0.1- https://codex.danifluffy.dev
+// CODEX.GS v0.2- https://codex.danifluffy.dev
 // Library to manage spreadsheets with an ORM correlated to JS Maps.
 // Created by danifluffy.dev
 
@@ -1776,7 +1776,7 @@ class Codex {
                 }
 
                 // Converte para texto
-                let convertedValue = String(value)
+                let convertedValue = value == null ? "" : String(value)
 
                 // Executa comparação
                 switch (mode) {
