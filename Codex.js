@@ -1,4 +1,4 @@
-// CODEX.GS v0.2- https://codex.danifluffy.dev
+// CODEX.GS v0.3- https://codex.danifluffy.dev
 // Library to manage spreadsheets with an ORM correlated to JS Maps.
 // Created by danifluffy.dev
 
@@ -1531,6 +1531,24 @@ class Codex {
 
 
     // MÉTODOS PÚBLICOS
+
+    /**
+     * Retrieves the configuration values and metadata of the current Codex instance.
+     *
+     * @param {("sheetid"|"tablename"|"keycolname"|"columns")} name - The identifier of the option to be accessed.
+     * @returns {string|string[]|undefined} The value corresponding to the requested option:
+     * - `string`: For the "sheetid", "tablename", and "keycolname" options.
+     * - `string[]`: For the "columns" option (returns a new destructured array to avoid mutating the internal Set).
+     * - `undefined`: If the provided name does not match any valid option.
+     */
+    options(name) {
+        switch (name) {
+            case "sheetid": return this._sheetID;
+            case "tablename": return this._tableName;
+            case "keycolname": return this._keyColumnName;
+            case "columns": return [...this._options.columns];
+        }
+    }
 
     /**
      * Removes all elements from the Codex instance and schedules a full cleanup 
