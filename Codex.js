@@ -212,8 +212,8 @@ class Codex {
 
                 case "minimal":
                     try {
-                        let keys = this._getRowIndexesByKey(true, columnIndexes)            // Obtém keys
-                        this._keys = new Map([...keys.keys()].map(k => [k, "unmodified"]))  // Adiciona keys ao Map mestre
+                        let keys = this._getRowIndexesByKey(true, columnIndexes)                    // Obtém keys
+                        this._keys = new Map([...keys.keys()].map(k => [String(k), "unmodified"]))  // Adiciona keys ao Map mestre
                     }
                     catch (e) { throw this._log(500, { message: "Error to get values.", stack: e.stack }) }     // Retorna erros
                     break;
@@ -1624,7 +1624,8 @@ class Codex {
         if (this._commited) throw this._log(250)
 
         try {
-            let keyStatus = this._keys.get(String(key).trim())  // Obtém estado
+            key = String(key).trim()                            // Ajusta key para texto
+            let keyStatus = this._keys.get(key)                 // Obtém estado
             if (keyStatus === undefined) return false           // Se não existe, false
             if (keyStatus === "deleted") return false           // Se deletado, false
             return true                                         // Retorna que existe
