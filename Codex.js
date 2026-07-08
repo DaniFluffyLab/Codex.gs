@@ -333,22 +333,27 @@ class Codex {
 
         // ETAPA PARA LIBERAÇÃO DE USO
 
-        if (action === "release") switch (role) {
+        if (action === "release") {
 
-            case "reader":
-                while (!locker.tryLock(3000)) {         // Tenta obter cadeado do LockService
-                    failedTries++;                      // Soma uma tentativa fracassada
-                    if (failedTries > 30) return false  // Se mais que 30 tentativas, desistir
-                }
-                let readersCount = Math.max(0, (getMetadata(k.readers) || 1) - 1)   // Obtém leitores - 1
-                setMetadata(k.readers, readersCount)                                // Grava novos leitores
-                locker.releaseLock()                                                // Destranca cadeado
-                return true;                                                        // Encerra execução
+            while (!locker.tryLock(3000)) {         // Tenta obter cadeado do LockService
+                failedTries++;                      // Soma uma tentativa fracassada
+                if (failedTries > 30) return false  // Se mais que 30 tentativas, desistir
+            }
+            
+            // Alterna comportamento por função
+            switch (role) {
 
-            case "writer":
-                setMetadata(k.writing, false)   // Define estado de escrita
-                locker.releaseLock()            // Destranca cadeado
-                return true;                    // Encerra execução
+                case "reader":
+                    let readersCount = Math.max(0, (getMetadata(k.readers) || 1) - 1)   // Obtém leitores - 1
+                    setMetadata(k.readers, readersCount)                                // Grava novos leitores
+                    locker.releaseLock()                                                // Destranca cadeado
+                    return true;                                                        // Encerra execução
+
+                case "writer":
+                    setMetadata(k.writing, false)   // Define estado de escrita
+                    locker.releaseLock()            // Destranca cadeado
+                    return true;                    // Encerra execução
+            }
         }
 
 
@@ -358,9 +363,11 @@ class Codex {
         if (action === "lock") while (true) {
 
             // Caso tabela esteja ocupada escrevendo [Checagem 1]
-            if (getMetadata(k.writing)) {
-                if (!sentLog) { this._log(100); sentLog = true }    // Avisar que está ocupada
+            if (getMetadata(k.writing) || false) {
+                if (!sentLog) { this._log(100); sentLog = true }        // Avisar que está ocupada
                 Utilities.sleep(3000)                                   // Espera 3 segundos
+                failedTries++;                                          // Soma uma tentativa fracassada
+                if (failedTries > 30) return false                      // Se mais que 30 tentativas, desistir
                 continue;                                               // Tenta de novo
             }
 
@@ -369,14 +376,16 @@ class Codex {
                 if (failedTries > 30) return false  // Se mais que 30 tentativas, desistir
             }
 
-            let isWriting = getMetadata(k.writing)      // Checa se tabela está ocupada com escrita
-            let readersCount = getMetadata(k.readers)   // Checa se existem leitores
+            let isWriting = getMetadata(k.writing)          // Obtém se tabela está ocupada com escrita
+            let readersCount = getMetadata(k.readers) || 0  // Obtém se existem leitores
 
             // Caso tabela esteja ocupada [Checagem 2]
             if (isWriting || (role === "writer" && readersCount !== 0)) {
-                if (!sentLog) { this._log(100); sentLog = true }    // Avisar que está ocupada
-                Utilities.sleep(3000)                                   // Espera 3 segundos
+                if (!sentLog) { this._log(100); sentLog = true }        // Avisar que está ocupada
                 locker.releaseLock()                                    // Destranca o cadeado
+                Utilities.sleep(3000)                                   // Espera 3 segundos
+                failedTries++;                                          // Soma uma tentativa fracassada
+                if (failedTries > 30) return false                      // Se mais que 30 tentativas, desistir
                 continue;                                               // Tenta de novo
             }
 
@@ -390,8 +399,8 @@ class Codex {
                     return true;                            // Libera execução
 
                 case ("writer"):
-
                     setMetadata(k.writing, true)    // Salva a informação de tranca
+                    locker.releaseLock()            // Destranca o cadeado
                     return true;                    // Libera execução
             }
         }
@@ -1533,14 +1542,14 @@ class Codex {
     // MÉTODOS PÚBLICOS
 
     /**
-     * Retrieves the configuration values and metadata of the current Codex instance.
-     *
-     * @param {("sheetid"|"tablename"|"keycolname"|"columns")} name - The identifier of the option to be accessed.
-     * @returns {string|string[]|undefined} The value corresponding to the requested option:
-     * - `string`: For the "sheetid", "tablename", and "keycolname" options.
-     * - `string[]`: For the "columns" option (returns a new destructured array to avoid mutating the internal Set).
-     * - `undefined`: If the provided name does not match any valid option.
-     */
+     * Retrieves the configuration values and metadata of the current Codex instance.
+     *
+     * @param {("sheetid"|"tablename"|"keycolname"|"columns")} name - The identifier of the option to be accessed.
+     * @returns {string|string[]|undefined} The value corresponding to the requested option:
+     * - `string`: For the "sheetid", "tablename", and "keycolname" options.
+     * - `string[]`: For the "columns" option (returns a new destructured array to avoid mutating the internal Set).
+     * - `undefined`: If the provided name does not match any valid option.
+     */
     options(name) {
         switch (name) {
             case "sheetid": return this._sheetID;
