@@ -182,6 +182,15 @@ class Mapper {
 
 
     /**
+     * Marca se todas as keys estão carregadas na memória.
+     * @type {boolean}
+     * @private
+     */
+    this._loadedAllKeys = this._options.mode == "full"
+
+
+
+    /**
      * Marca se a planilha deve ser toda zerada.
      * @type {boolean}
      * @private
@@ -985,10 +994,10 @@ class Mapper {
   }
 
   /**
-  * Define a new status for the key.
-  * @param {string} key The key of the entry to update status.
-  * @param {"new"|"modified"|"deleted"} newState The status of the key.
-  * @private
+    * Define a new status for the key.
+    * @param {string} key The key of the entry to update status.
+    * @param {"new"|"modified"|"deleted"} newState The status of the key.
+    * @private
   */
   _setKeyAs(key, newState) {
 
@@ -1032,6 +1041,42 @@ class Mapper {
         break;
 
     }
+  }
+
+  /**
+   * Carrega uma chave específica ou todas as chaves da planilha para a memória.
+   * Se chamada sem argumentos, realiza uma busca completa e sela a memória para evitar futuras requisições.
+   *
+   * @param {string|boolean} [key=true] - A chave que se deseja carregar. Se omitida ou passada como `true`, todas as chaves serão carregadas.
+   * @returns {boolean} Retorna `true` se novas chaves foram encontradas e registradas na memória, ou `false` caso contrário.
+   * @private
+   */
+  _loadKey(key = true) {
+
+    // Não executa se todas as keys já foram carregadas antes
+    if (this._loadedAllKeys) return false
+
+    // Prepara var com as keys
+    let foundKeys = new Map()
+
+    // Se não solicitado uma key específica
+    if (key == true) {
+      this._loadedAllKeys = true                  // Marca que todas as keys estarão na memória
+      foundKeys = this._getRowIndexesByKey(true)  // Busca todas as keys
+    }
+
+    // Se solicitado buscar uma key
+    else {
+      key = String(key).trim()                  // Limpa keys
+      if (this._keys.has(key)) return false     // Se key carregada, encerra
+      foundKeys = this._getRowIndexesByKey(key) // Busca key solicitada
+    }
+
+    // Adiciona keys à memória
+    if (foundKeys.size == 0) return false                                         // Encerra execução se não há keys a adicionar
+    for (let foundKey of foundKeys.keys()) this._keys.set(foundKey, "unmodified") // Adiciona keys solicitadas
+    return true                                                                   // Encerra execução
+
   }
 
   /**
@@ -2415,6 +2460,5 @@ class Mapper {
  * @deprecated Use `Mapper` em vez de `Codex`. Mantido para fins de retrocompatibilidade.
  */
 const Codex = Mapper;
-
 
 
