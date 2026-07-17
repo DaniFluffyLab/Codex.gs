@@ -1,9 +1,9 @@
-# Codex.gs
+# Mapper.gs _(anteriormente Codex.gs)_
 
 > [!WARNING]
-> A biblioteca Codex está tecnicamente funcional, mas este projeto ainda está sendo ativamente testado e corrigido bugs, portanto **cuidado ao utilizar em sistemas em produção**. Caso você encontre algum bug, fique à vontade para abrir uma issue!
+> A biblioteca Mapper está tecnicamente funcional, mas este projeto ainda está sendo ativamente testado e corrigido bugs, portanto **cuidado ao utilizar em sistemas em produção**. Caso você encontre algum bug, fique à vontade para abrir uma issue!
 
-**Codex.gs** é uma biblioteca do Google Apps Script (GAS) para manipular uma planilha do Google Sheets de forma análoga a um [Map do Javascript](https://developer.mozilla.org/pt-BR/docs/Web/JavaScript/Reference/Global_Objects/Map). Ao criar um objeto Codex, você pode manipular sua planilha por pares de chave-objeto, que representam as linhas da planilha, e onde cada propriedade do objeto representa uma coluna.
+**Mapper.gs** é uma biblioteca do Google Apps Script (GAS) para manipular uma planilha do Google Sheets de forma análoga a um [Map do Javascript](https://developer.mozilla.org/pt-BR/docs/Web/JavaScript/Reference/Global_Objects/Map). Ao criar um objeto Mapper, você pode manipular sua planilha por pares de chave-objeto, que representam as linhas da planilha, e onde cada propriedade do objeto representa uma coluna.
 
 Por exemplo, imagine uma planilha de ID _"abcABC1234"_ com uma aba chamada "_Users_":
 
@@ -16,7 +16,7 @@ Por exemplo, imagine uma planilha de ID _"abcABC1234"_ com uma aba chamada "_Use
 Digitando o código abaixo no GAS:
 
 ```javascript
-let users = new Codex("abcABC1234", "Users", "id")
+let users = new Mapper("abcABC1234", "Users", "id")
 let activeUser = users.get("111")
 console.log(activeUser)
 ```
@@ -53,41 +53,41 @@ Além disso, qualquer edição realizada por ela é aplicada em tempo real na pl
 
 A SpreadsheetApp é uma boa API para uma planilha, mas não me é um CRUD prático.
 
-Sendo assim, os objetivos da Codex são:
+Sendo assim, os objetivos do Mapper são:
 
 - **Diminuir a lentidão nos processos de leitura e escrita:**  
-Toda a Codex é pensada para diminuir chamadas à API do Google, porque essas tendem a ser o ponto de gargalo de qualquer projeto do GAS.
+Todo o Mapper é pensado para diminuir chamadas à API do Google, porque essas tendem a ser o ponto de gargalo de qualquer projeto do GAS.
 
 - **Simplificar transações de Criação, Leitura, Escrita e Exclusão:**  
 Imitando o comportamento de um Map de objetos, adicionar, ler e escrever dados se torna tão simples quanto ler e escrever as propriedades de um objeto literal que você busca em um Map.
 
 - **Facilitar busca de dados com funções de Query:**  
-Para iterar entre todos os usuários inativos, por exemplo, basta iterar sobre os valores de um `Codex.search({active: true})`
+Para iterar entre todos os usuários inativos, por exemplo, basta iterar sobre os valores de um `Mapper.search({active: true})`
 
 - **Otimizar operações na memória do GAS:**  
 A VM do Google Apps Script não consegue lidar com muitos dados ao mesmo tempo na memória.  
-Com o modo _'minimal'_, obtém-se os dados apenas quando iterados, e pode-se obter apenas um tipo de dado específico com uma query em `Codex.search()`.  
-Além disso, o modo _'full'_ permite obter apenas as colunas relevantes para o contexto em que a Codex está sendo instanciada.  
+Com o modo _'minimal'_, obtém-se os dados apenas quando iterados, e pode-se obter apenas um tipo de dado específico com uma query em `Mapper.search()`.  
+Além disso, o modo _'full'_ permite obter apenas as colunas relevantes para o contexto em que o Mapper está sendo instanciado.  
 Ao salvar os dados, toda informação é desindexada para o Garbage Collector do JS limpar a memória da execução e evitar travamentos.
 
 - **Compatibilizar dados não-nativos com Google Sheets**:  
 _BigInts_ se tornam _Integer_ ou _Strings_, _RegEx_ se tornam _Strings_, _Arrays_ e _Objetos literais_ se tornam _Strings JSON_, e vice-versa.  
 
 > [!NOTE]
-> Teoricamente Maps e Sets sõo compatíveis, mas como JSONs não suportam essas estruturas de dados nativamente, a Codex as converte no commit para Objetos literais e Arrays, respectivamente
+> Teoricamente Maps e Sets sõo compatíveis, mas como JSONs não suportam essas estruturas de dados nativamente,o Mapper as converte no commit para Objetos literais e Arrays, respectivamente
 
 - **Atomizar transações de dados:**  
-Nada é alterado na planilha até que se execute `Codex.commit()`. Caso o script quebre durante a transação, ou caso aconteça algo incomum nos servidores do Google, seus dados estão seguros.  
-Além disso, duas instâncias de _Codex_ podem ler uma planilha ao mesmo tempo, mas _não commitam_ ao mesmo tempo, para evitar que uma instância conflite com a outra.
+Nada é alterado na planilha até que se execute `Mapper.commit()`. Caso o script quebre durante a transação, ou caso aconteça algo incomum nos servidores do Google, seus dados estão seguros.  
+Além disso, duas instâncias de _Mapper_ podem ler uma planilha ao mesmo tempo, mas _não commitam_ ao mesmo tempo, para evitar que uma instância conflite com a outra.
 
 
 
 ## To-do
 - [x] _~~Implantar todos os requests de API~~_
 - [x] _~~Implantar todos os métodos análogos ao Map~~_
-- [ ] (atual) Testar e validar todas as funções e todos os modos de operação
-- [ ] Testar atomicidade do commit
-- [ ] Modificar modo minimal para não haver necessidade de request de keys na construção da instância
+- [x] _~~Testar e validar todas as funções e todos os modos de operação~~_
+- [x] _~~Testar atomicidade do commit~~_
+- [ ] (em teste) Modificar modo minimal para não haver necessidade de request de keys na construção da instância 
 - [ ] Lançar v1
 - [ ] Escrever documentação e um readme mais interessante pro projeto
 

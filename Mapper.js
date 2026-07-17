@@ -220,11 +220,6 @@ class Mapper {
       switch (this._options.mode) {
 
         case "minimal":
-          try {
-            let keys = this._getRowIndexesByKey(true, columnIndexes)                    // Obtém keys
-            this._keys = new Map([...keys.keys()].map(k => [String(k), "unmodified"]))  // Adiciona keys ao Map mestre
-          }
-          catch (e) { throw this._log(500, { message: "Error to get values.", stack: e.stack }) }     // Retorna erros
           break;
 
         case "full":
@@ -1637,6 +1632,7 @@ class Mapper {
     try {
 
       key = String(key).trim()          // Formata key
+      this._loadKey(key)                // Carrega key na memória
       let status = this._keys.get(key)  // Verifica se há um dado a ser excluido
 
       // Varia comportamento
@@ -1670,6 +1666,7 @@ class Mapper {
 
     try {
       key = String(key).trim()                            // Ajusta key para texto
+      this._loadKey(key)                                  // Carrega key para memória
       let keyStatus = this._keys.get(key)                 // Obtém estado
       if (keyStatus === undefined) return false           // Se não existe, false
       if (keyStatus === "deleted") return false           // Se deletado, false
@@ -1701,6 +1698,7 @@ class Mapper {
 
     // Obtém dados da key solicitada
     key = String(key).trim()                        // Formata a key
+    this._loadKey(key)                              // Carrega key na memória
     keyStatus = this._keys.get(key)                 // Obtém estado da key
     if (keyStatus === undefined) return undefined   // Se não existe, encerra
     if (keyStatus === "deleted") return undefined   // Se deletada, encerra
@@ -1728,9 +1726,9 @@ class Mapper {
     if (this._commited) throw this._log(250)
 
     try {
-
+      this._loadKey(true)                         // Carrega todas as keys na memória
       for (const [key, status] of this._keys) {   // Para cada key
-        if (status !== "deleted") yield key     // Retorna sob demanda as keys
+        if (status !== "deleted") yield key       // Retorna sob demanda as keys
       }
 
     } catch (e) { throw this._log(500, e) }     // Retorna erros não conhecidos
