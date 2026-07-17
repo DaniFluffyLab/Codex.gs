@@ -759,8 +759,7 @@ class Mapper {
 
     let requestedData = new Map()                                               // Informações de dados a serem requeridos para a API
     let mode = Array.isArray(requestedKeysOrRows) ? "ROWS" : "COLUMNS"          // Define modo de execução
-    if (columnIndexes == undefined) columnIndexes = this._getColumnIndexes()    // Obtém índices de colunas, caso não recebido
-    let lastRow = this._table.getLastRow();                                     // Obtém última linha
+    let lastRow;                                                                // Var para última linha
     let requestedRows;                                                          // Var para valores de linhas
 
     // Obtém índices das linhas
@@ -780,6 +779,9 @@ class Mapper {
 
         case 'number':
 
+          // Obtém última linha
+          lastRow = lastRow ?? this._table.getLastRow()
+
           // Testa se índices são válidos
           if (requestedKeysOrRows.some(v => (v >= lastRow || v < 1))) {
             throw this._log(412)
@@ -791,8 +793,20 @@ class Mapper {
 
         case 'string':
 
+          // Prepara para limpar a keys
+          let cleared_requestedKeys = new Set()
+
+          // Adiciona no request apenas keys não carregadas
+          for (let key of requestedKeysOrRows) {
+            if (this._keys.has(key)) continue
+            cleared_requestedKeys.add(key)
+          }
+
+          // Encerra a requisição se não houver keys
+          if (cleared_requestedKeys.size === 0) return;
+
           // Obtém os índices com função auxiliar
-          requestedRows = [...this._getRowIndexesByKey(requestedKeysOrRows).values()]
+          requestedRows = [...this._getRowIndexesByKey([...cleared_requestedKeys]).values()]
           break;
 
         default:
@@ -801,10 +815,16 @@ class Mapper {
 
     }
 
+
+    // Obtém índices de colunas, caso não recebido
+    if (columnIndexes == undefined) columnIndexes = this._getColumnIndexes()
+
+
     // Monta os objetos de requisição
     switch (mode) {
 
       case "COLUMNS":
+      lastRow = lastRow ?? this._table.getLastRow()
         for (let [colName, colIndex] of columnIndexes) {
           requestedData.set(colName, {
             gridRange: {
@@ -1666,7 +1686,7 @@ class Mapper {
 
     try {
       key = String(key).trim()                            // Ajusta key para texto
-      this._loadKey(key)                                  // Carrega key para memória
+      this._loadKey(true)                                 // Carrega todas as keys
       let keyStatus = this._keys.get(key)                 // Obtém estado
       if (keyStatus === undefined) return false           // Se não existe, false
       if (keyStatus === "deleted") return false           // Se deletado, false
@@ -1698,18 +1718,12 @@ class Mapper {
 
     // Obtém dados da key solicitada
     key = String(key).trim()                        // Formata a key
-    this._loadKey(key)                              // Carrega key na memória
+    this._fetchNewData([key])                       // Carrega valor na memória
     keyStatus = this._keys.get(key)                 // Obtém estado da key
     if (keyStatus === undefined) return undefined   // Se não existe, encerra
     if (keyStatus === "deleted") return undefined   // Se deletada, encerra
-    keyLoaded = this._data.has(key)                 // Verifica se carregado
-
-    // Requisita o fetch do dado se não existe
-    if (!keyLoaded) this._fetchNewData([key])
-
-    // Carrega o dado
-    requestedData = this._data.get(key)     // Carrega o dado em uma var local
-    if (!requestedData) return undefined    // Se não achar, retorna undefined
+    requestedData = this._data.get(key)             // Carrega o dado em uma var local
+    if (!requestedData) return undefined            // Se não achar, retorna undefined
 
     // Cria proxy do objeto e retorna.
     return this._createProxy(requestedData, key)
