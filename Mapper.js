@@ -1,4 +1,4 @@
-// Mapper.GS v0.3- https://codex.danifluffy.dev
+// Mapper.GS v0.4- https://codex.danifluffy.dev
 // Library to manage spreadsheets with an ORM correlated to JS Maps.
 // Created by danifluffy.dev
 
@@ -824,7 +824,7 @@ class Mapper {
     switch (mode) {
 
       case "COLUMNS":
-      lastRow = lastRow ?? this._table.getLastRow()
+        lastRow = lastRow ?? this._table.getLastRow()
         for (let [colName, colIndex] of columnIndexes) {
           requestedData.set(colName, {
             gridRange: {
@@ -2236,8 +2236,27 @@ class Mapper {
      */
     let api_prepareAddRequests = (columnIndexes) => {
 
+      /** Adiciona o payload a var de retorno e limpa a var de trabalho */
+      const AUX_addPayload = () => {
+        if (activeRequest.length == 0) return
+        requestAdd.push({
+          appendCells: {
+            sheetId: this._tableID,
+            rows: [...activeRequest],
+            fields: "userEnteredValue, userEnteredFormat"
+          }
+        })
+        activeRequest = []
+        actualPayloadSize = 0
+      }
+
       // Prepara vars para adicionar linhas
       let requestAdd = []
+      let activeRequest = []
+
+      // Limita o payload criado a 900kB
+      let limitPayloadSize = 900000
+      let actualPayloadSize = 0
 
       // Itera sobre os valores
       for (let [key, status] of this._keys) {
@@ -2259,18 +2278,21 @@ class Mapper {
           // Adiciona item na array
           values[index] = value
         }
-        requestAdd.push({ "values": values })   // Armazena valor no array
+
+        // Armazena valor no array de trabalho
+        activeRequest.push({ "values": values })
+
+        // Se alcançou limite do payload, gravar payload à saída
+        actualPayloadSize += JSON.stringify({ "values": values }).length
+        if (actualPayloadSize > limitPayloadSize) AUX_addPayload()
       }
+
+      // Grava payload final à saída
+      AUX_addPayload()
 
       // Retorna undefined se está vazio
       if (requestAdd.length === 0) return []
-      else return [{
-        appendCells: {
-          sheetId: this._tableID,
-          rows: requestAdd,
-          fields: "userEnteredValue, userEnteredFormat"
-        }
-      }]
+      else return requestAdd
     }
 
     /**
